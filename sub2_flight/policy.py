@@ -60,13 +60,13 @@ class PIDFlightPolicy:
     """
 
     # PID gains — lateral (XY) and vertical (Z) tuned separately
-    KP_XY = 4.0
-    KI_XY = 0.05
+    KP_XY = 8.0
+    KI_XY = 0.1
     KD_XY = 6.0
 
-    KP_Z  = 6.0
-    KI_Z  = 0.1
-    KD_Z  = 4.0
+    KP_Z  = 8.0
+    KI_Z  = 0.2
+    KD_Z  = 5.0
 
     # Anti-windup clamp on the integral term (Newtons)
     INTEGRAL_CLAMP_XY = 2.0
