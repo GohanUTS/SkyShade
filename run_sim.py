@@ -8,7 +8,7 @@ Starts a PyBullet GUI window and runs all four subsystems together:
   Sub-4  Nav Safety       MDP policy table
 
 A simulated user walks a figure-8 path below the drone.  Weather sensors
-randomly switch between bright sun, cloudy periods, light rain, and full rain.
+randomly switch between cloudy periods, light rain, and full rain.
 Battery drains and triggers the Sub-4 safety override.
 
 Usage:
@@ -67,29 +67,23 @@ class RandomWeatherController:
     """Holds each weather mode briefly, then randomly switches to a new one."""
 
     MODES = {
-        "Bright sun": {
-            "lux": (78_000, 100_000),
-            "rain": (0.0, 0.03),
-            "wind": (0.7, 2.0),
-            "weight": 0.28,
-        },
         "Cloudy": {
             "lux": (28_000, 56_000),
             "rain": (0.0, 0.18),
             "wind": (1.4, 3.0),
-            "weight": 0.24,
+            "weight": 0.40,
         },
         "Light rain": {
             "lux": (15_000, 38_000),
             "rain": (0.25, 0.55),
             "wind": (2.0, 4.0),
-            "weight": 0.22,
+            "weight": 0.30,
         },
         "Full rain": {
             "lux": (4_000, 18_000),
             "rain": (0.85, 1.0),
             "wind": (3.2, 5.8),
-            "weight": 0.26,
+            "weight": 0.30,
         },
     }
 
@@ -135,35 +129,91 @@ class RandomWeatherController:
         self.next_sample_t = t + 1.0
 
 
+def _add_debug_ellipse(phys, center, radius_x, radius_z, color, line_width, lifetime):
+    cx, cy, cz = center
+    segments = 14
+    prev = None
+    for i in range(segments + 1):
+        angle = 2.0 * math.pi * i / segments
+        point = [
+            cx + math.cos(angle) * radius_x,
+            cy,
+            cz + math.sin(angle) * radius_z,
+        ]
+        if prev is not None:
+            p.addUserDebugLine(
+                prev, point, color,
+                lineWidth=line_width, lifeTime=lifetime,
+                physicsClientId=phys,
+            )
+        prev = point
+
+
+def _draw_cloud(phys, x, y, z, scale, color):
+    lifetime = 0.55
+    puffs = [
+        (-0.55, 0.00, 0.42, 0.18),
+        (-0.18, 0.14, 0.52, 0.24),
+        (0.25, 0.06, 0.46, 0.20),
+        (0.62, -0.02, 0.34, 0.16),
+    ]
+    for dx, dz, rx, rz in puffs:
+        _add_debug_ellipse(
+            phys,
+            [x + dx * scale, y, z + dz * scale],
+            rx * scale,
+            rz * scale,
+            color,
+            3.0,
+            lifetime,
+        )
+
+    base_left = [x - 0.95 * scale, y, z - 0.16 * scale]
+    base_right = [x + 0.95 * scale, y, z - 0.16 * scale]
+    p.addUserDebugLine(
+        base_left, base_right, color,
+        lineWidth=4.0, lifeTime=lifetime,
+        physicsClientId=phys,
+    )
+
+
+def _draw_cloud_bank(phys, mode):
+    if mode == "Cloudy":
+        color = [0.68, 0.73, 0.80]
+    else:
+        color = [0.42, 0.48, 0.58]
+
+    for cloud in [
+        (-3.0, -3.9, 4.10, 1.10),
+        (-0.7, -4.1, 4.35, 1.25),
+        (1.7, -3.8, 4.05, 1.00),
+        (3.4, -4.2, 4.30, 0.90),
+    ]:
+        _draw_cloud(phys, *cloud, color)
+
+
 def draw_weather_visuals(phys, weather, rng):
     mode = weather["mode"]
     rain = weather["rain"]
     wind = weather["wind"]
 
-    if mode == "Bright sun":
-        for offset in np.linspace(-3.0, 3.0, 7):
-            start = [-4.5 + offset, -4.0, 4.6]
-            end = [-3.4 + offset, -2.9, 3.35]
-            p.addUserDebugLine(
-                start, end, [1.0, 0.82, 0.18],
-                lineWidth=1.6, lifeTime=0.45, physicsClientId=phys,
-            )
+    _draw_cloud_bank(phys, mode)
 
     if rain < 0.2:
         return
 
-    drop_count = int(10 + rain * 36)
+    drop_count = int(30 + rain * 90)
     for _ in range(drop_count):
         x = float(rng.uniform(-4.0, 4.0))
         y = float(rng.uniform(-4.0, 4.0))
         z = float(rng.uniform(2.4, 5.2))
-        drift = 0.05 * wind
+        drift = 0.07 * wind
         p.addUserDebugLine(
             [x, y, z],
-            [x + drift, y + drift * 0.35, z - 0.75],
-            [0.35, 0.65, 1.0],
-            lineWidth=1.0 + rain,
-            lifeTime=0.32,
+            [x + drift, y + drift * 0.35, z - 1.05],
+            [0.18, 0.55, 1.0],
+            lineWidth=2.2 + rain * 2.0,
+            lifeTime=0.42,
             physicsClientId=phys,
         )
 
