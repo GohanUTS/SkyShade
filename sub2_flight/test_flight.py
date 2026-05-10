@@ -1,7 +1,7 @@
 """
 Sub-2 Flight — validation test.
 
-Evaluates the trained Q-agent across 10 episodes for each of three scenarios:
+Evaluates the PID hover controller across 10 episodes for each of three scenarios:
   1. Stationary user, no wind
   2. Stationary user, gusty wind (3 m/s)
   3. Walking user, gusty wind    (3 m/s)
@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import numpy as np
 from sub2_flight.env.hover_env import HoverEnv, HOVER_RADIUS_M
-from sub2_flight.policy import FlightPolicy
+from sub2_flight.policy import PIDFlightPolicy
 
 EVAL_EPISODES = 10
 SCENARIOS = [
@@ -33,36 +33,22 @@ PASS_MEAN_REWARD = 150.0
 PASS_HOVER_EPISODES = 9   # Out of EVAL_EPISODES
 
 
-def evaluate_scenario(policy: FlightPolicy, scenario: dict, rng) -> dict:
+def evaluate_scenario(pid: PIDFlightPolicy, scenario: dict, rng) -> dict:
     env = HoverEnv(render=False)
     rewards = []
     hover_successes = 0
 
     for ep in range(EVAL_EPISODES):
         user_pos = [rng.uniform(-1, 1), rng.uniform(-1, 1), 0.0]
-        state = env.reset(wind_speed=scenario["wind"], user_pos=user_pos)
-        total_reward = 0.0
-        done = False
-        step = 0
-        within_hover = False
-
-        while not done:
-            action = policy.select_action(state)
-
-            if scenario["walk"] and step % 20 == 0 and step > 0:
-                env._user_pos[0] += rng.uniform(-0.2, 0.2)
-                env._user_pos[1] += rng.uniform(-0.2, 0.2)
-
-            state, reward, done, _ = env.step(action)
-            total_reward += reward
-            step += 1
-
-            dist = np.linalg.norm(env.drone_pos[:2] - env._user_pos[:2])
-            if dist <= HOVER_RADIUS_M:
-                within_hover = True
-
+        total_reward, reached_hover = pid.run_episode(
+            env,
+            wind_speed=scenario["wind"],
+            user_pos=user_pos,
+            walk=scenario["walk"],
+            rng=rng,
+        )
         rewards.append(total_reward)
-        if within_hover:
+        if reached_hover:
             hover_successes += 1
 
     env.close()
@@ -73,23 +59,18 @@ def evaluate_scenario(policy: FlightPolicy, scenario: dict, rng) -> dict:
 
 
 def main():
-    try:
-        policy = FlightPolicy()
-    except FileNotFoundError as e:
-        print(f"ERROR: {e}")
-        sys.exit(1)
-
+    pid = PIDFlightPolicy()
     rng = np.random.default_rng(99)
     all_passed = True
 
     for scenario in SCENARIOS:
         print(f"\nScenario: {scenario['name']}")
-        result = evaluate_scenario(policy, scenario, rng)
+        result = evaluate_scenario(pid, scenario, rng)
         mean_r = result["mean_reward"]
         hover_ok = result["hover_successes"]
 
         ok_reward = mean_r > PASS_MEAN_REWARD
-        ok_hover = hover_ok >= PASS_HOVER_EPISODES
+        ok_hover  = hover_ok >= PASS_HOVER_EPISODES
 
         status = "PASS" if (ok_reward and ok_hover) else "FAIL"
         print(f"  Mean reward      : {mean_r:+.1f}  (target > {PASS_MEAN_REWARD})  {'✓' if ok_reward else '✗'}")

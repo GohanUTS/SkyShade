@@ -46,7 +46,7 @@ N_ACTIONS = 7
 # ── Drone physics constants ───────────────────────────────────────────────────
 DRONE_MASS_KG = 1.5          # kg
 HOVER_FORCE_N = DRONE_MASS_KG * 9.81  # Newtons to counteract gravity
-STEP_FORCE_N = 5.0           # Force applied per action step
+STEP_FORCE_N = 1.5           # Force applied per action step (kept small to prevent velocity build-up)
 TARGET_ALTITUDE = 2.5        # Metres above ground (desired hover height)
 HOVER_RADIUS_M = 0.5         # Within this radius counts as "hovering"
 MAX_TILT_RAD = math.radians(30)  # Penalise tilts beyond 30°
@@ -57,6 +57,8 @@ HOVER_BONUS = +5.0
 ATTITUDE_PENALTY_SCALE = -2.0
 CRASH_PENALTY = -100.0
 PROGRESS_SCALE = 10.0        # Multiplier on approach progress
+SPEED_PENALTY_SCALE = -0.5   # Penalise lateral speed so Q-agent avoids velocity build-up
+LINEAR_DAMPING = 0.4         # PyBullet damping coefficient to bleed off lateral momentum
 
 # ── Simulation constants ──────────────────────────────────────────────────────
 SIM_TIMESTEP = 1.0 / 240.0
@@ -129,6 +131,42 @@ class HoverEnv:
 
         return state, reward, done, info
 
+    def pid_step(self, force_xyz: np.ndarray):
+        """
+        Apply a continuous 3-D force vector (world frame) for one action tick.
+        Used by PIDFlightPolicy; bypasses the discrete action lookup.
+        Returns (state, reward, done, info) like step().
+        """
+        wind_dir = np.random.uniform(-1, 1, 3)
+        wind_dir[2] = 0
+        wind_force = wind_dir * self._wind_speed
+
+        total = np.array(force_xyz) + wind_force
+        total[2] += HOVER_FORCE_N  # always add anti-gravity
+
+        if PYBULLET_AVAILABLE and self._drone_id is not None:
+            for _ in range(STEPS_PER_ACTION):
+                p.applyExternalForce(
+                    self._drone_id, -1,
+                    total.tolist(),
+                    [0, 0, 0],
+                    p.WORLD_FRAME,
+                    physicsClientId=self._physics_id,
+                )
+                p.stepSimulation(physicsClientId=self._physics_id)
+            pos, _ = p.getBasePositionAndOrientation(
+                self._drone_id, physicsClientId=self._physics_id
+            )
+            self._drone_pos = np.array(pos)
+        else:
+            self._drone_pos += total * SIM_TIMESTEP * STEPS_PER_ACTION * 0.1
+
+        self._step_count += 1
+        state = self._get_state()
+        reward = self._compute_reward()
+        done = self._is_done()
+        return state, reward, done, {"wind_speed": self._wind_speed, "step": self._step_count}
+
     def close(self):
         if PYBULLET_AVAILABLE and self._physics_id is not None:
             p.disconnect(self._physics_id)
@@ -158,6 +196,7 @@ class HoverEnv:
         )
         p.changeDynamics(
             self._drone_id, -1, mass=DRONE_MASS_KG,
+            linearDamping=LINEAR_DAMPING, angularDamping=0.9,
             physicsClientId=self._physics_id
         )
 
@@ -171,9 +210,16 @@ class HoverEnv:
             physicsClientId=self._physics_id,
         )
 
-        # Step once to settle
+        # Step briefly to let the physics world settle, then zero out the
+        # velocity the drone gained during the free-fall settle steps — otherwise
+        # that initial downward velocity persists throughout the episode because
+        # the hover force exactly cancels gravity (zero net acceleration).
         for _ in range(10):
             p.stepSimulation(physicsClientId=self._physics_id)
+        p.resetBaseVelocity(
+            self._drone_id, [0, 0, 0], [0, 0, 0],
+            physicsClientId=self._physics_id
+        )
 
         pos, _ = p.getBasePositionAndOrientation(
             self._drone_id, physicsClientId=self._physics_id
@@ -198,18 +244,22 @@ class HoverEnv:
         wind_dir[2] = 0   # horizontal only
         wind_force = wind_dir * self._wind_speed
 
-        total_force = np.array(thrust) + wind_force
-        total_force[2] += HOVER_FORCE_N  # constant anti-gravity thrust
+        # All forces in world frame so the hover thrust always points global-Z up,
+        # regardless of drone tilt (LINK_FRAME would rotate the thrust with the body).
+        # applyExternalForce only lasts ONE PyBullet step, so we re-apply it every
+        # step inside the loop — otherwise gravity wins for 7/8 of the substeps.
+        movement_and_wind = np.array(thrust) + wind_force
+        movement_and_wind[2] += HOVER_FORCE_N  # constant anti-gravity thrust
 
         if PYBULLET_AVAILABLE and self._drone_id is not None:
-            p.applyExternalForce(
-                self._drone_id, -1,
-                total_force.tolist(),
-                [0, 0, 0],
-                p.LINK_FRAME,
-                physicsClientId=self._physics_id,
-            )
             for _ in range(STEPS_PER_ACTION):
+                p.applyExternalForce(
+                    self._drone_id, -1,
+                    movement_and_wind.tolist(),
+                    [0, 0, 0],
+                    p.WORLD_FRAME,
+                    physicsClientId=self._physics_id,
+                )
                 p.stepSimulation(physicsClientId=self._physics_id)
             pos, _ = p.getBasePositionAndOrientation(
                 self._drone_id, physicsClientId=self._physics_id
@@ -248,7 +298,7 @@ class HoverEnv:
         if dist <= HOVER_RADIUS_M:
             reward += HOVER_BONUS
 
-        # Attitude penalty (requires PyBullet orientation)
+        # Attitude penalty + lateral speed penalty (requires PyBullet)
         if PYBULLET_AVAILABLE and self._drone_id is not None:
             _, orn = p.getBasePositionAndOrientation(
                 self._drone_id, physicsClientId=self._physics_id
@@ -257,6 +307,12 @@ class HoverEnv:
             tilt = math.sqrt(euler[0] ** 2 + euler[1] ** 2)
             if tilt > MAX_TILT_RAD:
                 reward += ATTITUDE_PENALTY_SCALE * (tilt - MAX_TILT_RAD)
+
+            # Penalise lateral speed so Q-agent prefers low-velocity hovering
+            # over oscillation (the state space has no velocity dimension).
+            lin_vel, _ = p.getBaseVelocity(self._drone_id, physicsClientId=self._physics_id)
+            lateral_speed = math.sqrt(lin_vel[0] ** 2 + lin_vel[1] ** 2)
+            reward += SPEED_PENALTY_SCALE * lateral_speed
 
         # Crash (hit the ground)
         if self._drone_pos[2] < 0.2:
@@ -274,3 +330,14 @@ class HoverEnv:
     @property
     def drone_pos(self) -> np.ndarray:
         return self._drone_pos.copy()
+
+    @property
+    def drone_vel(self) -> np.ndarray:
+        if PYBULLET_AVAILABLE and self._drone_id is not None:
+            lin, _ = p.getBaseVelocity(self._drone_id, physicsClientId=self._physics_id)
+            return np.array(lin)
+        return np.zeros(3)
+
+    @property
+    def user_pos(self) -> np.ndarray:
+        return self._user_pos.copy()
