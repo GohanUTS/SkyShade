@@ -8,8 +8,8 @@ Starts a PyBullet GUI window and runs all four subsystems together:
   Sub-4  Nav Safety       MDP policy table
 
 A simulated user walks a figure-8 path below the drone.  Weather sensors
-cycle through clear → cloudy → rainy → clear over 60 s.  Battery drains
-and triggers the Sub-4 safety override.
+randomly switch between bright sun, cloudy periods, light rain, and full rain.
+Battery drains and triggers the Sub-4 safety override.
 
 Usage:
     python run_sim.py [--duration 120] [--no-gui]
@@ -52,7 +52,8 @@ CONTROL_HZ         = 30
 BATTERY_DRAIN_RATE = 0.5    # % per second
 USER_WALK_SPEED    = 0.3    # rad/s for figure-8
 HOVER_RADIUS       = 0.5    # m
-WEATHER_PERIOD     = 60.0   # s
+WEATHER_MIN_SECONDS = 8.0
+WEATHER_MAX_SECONDS = 20.0
 
 
 def figure8(t, scale=1.5):
@@ -62,12 +63,109 @@ def figure8(t, scale=1.5):
                      0.0])
 
 
-def weather_at(t):
-    phase = (t % WEATHER_PERIOD) / WEATHER_PERIOD
-    lux   = 80_000 * (0.5 + 0.5 * math.cos(2 * math.pi * phase))
-    rain  = float(max(0.0, math.sin(2 * math.pi * phase)))
-    wind  = 1.5 + 2.5 * abs(math.sin(math.pi * phase))
-    return float(lux), rain, float(wind)
+class RandomWeatherController:
+    """Holds each weather mode briefly, then randomly switches to a new one."""
+
+    MODES = {
+        "Bright sun": {
+            "lux": (78_000, 100_000),
+            "rain": (0.0, 0.03),
+            "wind": (0.7, 2.0),
+            "weight": 0.28,
+        },
+        "Cloudy": {
+            "lux": (28_000, 56_000),
+            "rain": (0.0, 0.18),
+            "wind": (1.4, 3.0),
+            "weight": 0.24,
+        },
+        "Light rain": {
+            "lux": (15_000, 38_000),
+            "rain": (0.25, 0.55),
+            "wind": (2.0, 4.0),
+            "weight": 0.22,
+        },
+        "Full rain": {
+            "lux": (4_000, 18_000),
+            "rain": (0.85, 1.0),
+            "wind": (3.2, 5.8),
+            "weight": 0.26,
+        },
+    }
+
+    def __init__(self, seed=None):
+        self.rng = np.random.default_rng(seed)
+        self.mode = None
+        self.next_switch_t = 0.0
+        self.next_sample_t = 0.0
+        self.reading = None
+
+    def update(self, t):
+        if self.mode is None or t >= self.next_switch_t:
+            self._choose_next_mode(t)
+
+        if self.reading is None or t >= self.next_sample_t:
+            self._sample_reading(t)
+
+        return self.reading
+
+    def _choose_next_mode(self, t):
+        names = list(self.MODES)
+        weights = np.array([self.MODES[name]["weight"] for name in names], dtype=float)
+        if self.mode in names and len(names) > 1:
+            weights[names.index(self.mode)] *= 0.25
+        weights /= weights.sum()
+
+        self.mode = str(self.rng.choice(names, p=weights))
+        hold_for = self.rng.uniform(WEATHER_MIN_SECONDS, WEATHER_MAX_SECONDS)
+        self.next_switch_t = t + hold_for
+        self.next_sample_t = 0.0
+
+    def _sample_reading(self, t):
+        spec = self.MODES[self.mode]
+        lux = float(self.rng.uniform(*spec["lux"]))
+        rain = float(self.rng.uniform(*spec["rain"]))
+        wind = float(self.rng.uniform(*spec["wind"]))
+        self.reading = {
+            "mode": self.mode,
+            "lux": lux,
+            "rain": rain,
+            "wind": wind,
+        }
+        self.next_sample_t = t + 1.0
+
+
+def draw_weather_visuals(phys, weather, rng):
+    mode = weather["mode"]
+    rain = weather["rain"]
+    wind = weather["wind"]
+
+    if mode == "Bright sun":
+        for offset in np.linspace(-3.0, 3.0, 7):
+            start = [-4.5 + offset, -4.0, 4.6]
+            end = [-3.4 + offset, -2.9, 3.35]
+            p.addUserDebugLine(
+                start, end, [1.0, 0.82, 0.18],
+                lineWidth=1.6, lifeTime=0.45, physicsClientId=phys,
+            )
+
+    if rain < 0.2:
+        return
+
+    drop_count = int(10 + rain * 36)
+    for _ in range(drop_count):
+        x = float(rng.uniform(-4.0, 4.0))
+        y = float(rng.uniform(-4.0, 4.0))
+        z = float(rng.uniform(2.4, 5.2))
+        drift = 0.05 * wind
+        p.addUserDebugLine(
+            [x, y, z],
+            [x + drift, y + drift * 0.35, z - 0.75],
+            [0.35, 0.65, 1.0],
+            lineWidth=1.0 + rain,
+            lifeTime=0.32,
+            physicsClientId=phys,
+        )
 
 
 class TelemetryWindow:
@@ -566,8 +664,12 @@ class ConsoleTelemetry:
 
 def _telemetry_payload(
     t_wall, battery_pct, nav_override, umbrella_cmd, confidence,
-    err_xy, drone_pos, user_pos, user_offset, lux, rain, wind,
+    err_xy, drone_pos, user_pos, user_offset, weather,
 ):
+    lux = weather["lux"]
+    rain = weather["rain"]
+    wind = weather["wind"]
+    weather_mode = weather["mode"]
     user_offset_text = "--"
     if user_offset is not None:
         user_offset_text = f"x {user_offset[0]:.2f}, y {user_offset[1]:.2f}, z {user_offset[2]:.2f}"
@@ -610,7 +712,7 @@ def _telemetry_payload(
             "user_position": f"x {user_pos[0]:.2f}, y {user_pos[1]:.2f}",
             "user_offset": user_offset_text,
             "location_summary": location_summary,
-            "weather": f"Light {lux:.0f} lux, rain {rain:.2f}, wind {wind:.1f} m/s",
+            "weather": f"{weather_mode}: light {lux:.0f} lux, rain {rain:.2f}, wind {wind:.1f} m/s",
             "subsystem_summary": subsystem_summary,
             "perception": "Tracking the red user marker",
             "flight": "Holding hover and following the path",
@@ -703,6 +805,9 @@ def run(duration=120.0, gui=True):
     action_dt     = 1.0 / CONTROL_HZ
 
     telemetry = TelemetryWindow() if gui else ConsoleTelemetry()
+    weather_controller = RandomWeatherController()
+    weather_visual_rng = np.random.default_rng()
+    weather_now = weather_controller.update(0.0)
 
     umb_deployed = False
     t_start = time.monotonic()
@@ -721,6 +826,7 @@ def run(duration=120.0, gui=True):
             if telemetry.closed:
                 print("\nSimulation stopped from dashboard.")
                 break
+            weather_now = weather_controller.update(t_wall)
 
             # ── User walks figure-8 ───────────────────────────────────────────
             user_pos = figure8(t_wall * USER_WALK_SPEED)
@@ -751,7 +857,9 @@ def run(duration=120.0, gui=True):
 
             # ── Sub-3: Env decision (1 Hz) ────────────────────────────────────
             if tick % CONTROL_HZ == 0:
-                lux, rain, wind = weather_at(t_wall)
+                lux = weather_now["lux"]
+                rain = weather_now["rain"]
+                wind = weather_now["wind"]
                 cmd_int      = umbrella.predict(lux, rain, wind)
                 umbrella_cmd = "DEPLOY" if cmd_int else "STOW"
                 deployed     = cmd_int == 1
@@ -803,13 +911,15 @@ def run(duration=120.0, gui=True):
                 [0, 0, 0, 1], physicsClientId=phys,
             )
 
+            if gui and tick % 5 == 0:
+                draw_weather_visuals(phys, weather_now, weather_visual_rng)
+
             # ── Telemetry update (every 10 ticks) ─────────────────────────────
             if tick % 10 == 0:
                 err_xy = float(np.linalg.norm(np.array(d_pos2[:2]) - user_pos[:2]))
-                lux, rain, wind = weather_at(t_wall)
                 values, statuses = _telemetry_payload(
                     t_wall, battery_pct, nav_override, umbrella_cmd, confidence,
-                    err_xy, np.array(d_pos2), user_pos, user_offset, lux, rain, wind,
+                    err_xy, np.array(d_pos2), user_pos, user_offset, weather_now,
                 )
                 telemetry.update(values, statuses, battery_pct=battery_pct)
 
