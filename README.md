@@ -40,7 +40,7 @@ Simulated sensors (camera, IMU, env. sensors)
      |               |          |          |
   [SUB-1]        [SUB-2]    [SUB-3]    [SUB-4]
  Perception      Flight     Env.       Nav +
- CV + HSV        Q-Learn    Decision   Safety
+ CV + HSV        PID        Decision   Safety
                             SVM+PCA    MDP
      |               |          |          |
      +---------------+          |          |
@@ -241,47 +241,34 @@ CAMERA_FPS    = 30
 
 ### Sub-2: Flight Control
 
-A Q-learning agent that maps discretised drone state to a flight action. Trained entirely in the PyBullet hover environment before deployment.
+A PID flight controller that tracks the user position published by Sub-1 and applies a 3-D force vector to the drone at 30 Hz. A constant hover thrust offset compensates for gravity every physics step.
 
-**State space:**
-
-```python
-dx_buckets   = [-2, -1, 0, 1, 2]   # Relative x offset (metres, discretised)
-dy_buckets   = [-2, -1, 0, 1, 2]   # Relative y offset
-dz_buckets   = [-1,  0,  1]        # Relative altitude offset
-wind_buckets = [LOW, MEDIUM, HIGH]
-# Total states: 5 x 5 x 3 x 3 = 225
-```
-
-**Action space:**
-
-```
-0: MOVE_NORTH
-1: MOVE_SOUTH
-2: MOVE_EAST
-3: MOVE_WEST
-4: MOVE_UP
-5: MOVE_DOWN
-6: HOLD
-```
-
-**Reward function:**
+**Runtime controller** (`sub2_flight/policy.py`):
 
 ```python
-reward = progress_to_target       # Positive: getting closer to user
-       - step_penalty             # Small cost per timestep
-       - attitude_penalty         # Penalise excessive tilt
-       + hover_bonus              # Bonus for staying within 0.5 m
-       - crash_penalty            # Large negative on collision
+pid_target = [user_pos.x, user_pos.y, TARGET_ALTITUDE]
+force      = pid.compute_force(drone_pos, drone_vel, pid_target, dt)
+force[2]  += HOVER_FORCE_N   # gravity compensation
 ```
 
-**Key hyperparameters** (set in `sub2_flight/train_qlearning.py`):
+Sub-4 can override the target before PID runs:
+
+| `nav_override` | PID target |
+|---|---|
+| `CONTINUE` | User XY + target altitude |
+| `RTH` | Origin (0, 0) + target altitude |
+| `LAND_NOW` | Current XY + 0.3 m (descend) |
+
+**Q-learning (archived — used for training, not runtime)**
+
+A tabular Q-agent (225 states, 7 actions) was trained for 50 k episodes through three curriculum stages. Discretisation caused chattering near the hover target at runtime, so the PID controller replaced it for the integrated simulation. The trained Q-table is kept in `models/qtable_v1.npy` for reference.
 
 ```python
-ALPHA         = 0.1     # Learning rate
-GAMMA         = 0.95    # Discount factor
-EPSILON_START = 1.0     # Initial exploration rate
-EPSILON_END   = 0.05    # Final exploration rate
+# Archived hyperparameters (sub2_flight/train_qlearning.py)
+ALPHA         = 0.1
+GAMMA         = 0.95
+EPSILON_START = 1.0
+EPSILON_END   = 0.05
 EPSILON_DECAY = 0.9995
 EPISODES      = 50_000
 ```
