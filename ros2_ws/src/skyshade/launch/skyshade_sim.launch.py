@@ -1,21 +1,16 @@
 """
 SkyShade simulation launch file.
 
-Starts all four subsystem nodes in a single ROS2 launch.  PyBullet is
-expected to be already running (or will be started by the perception node
-on first camera pull).
+Starts the PyBullet simulation and all four subsystem nodes in a single
+ROS2 launch.
 
-Usage (from ros2_ws, with workspace sourced):
-    ros2 launch skyshade skyshade_sim.launch.py
+Usage, from ros2_ws with workspace sourced:
 
-Optional arguments:
-    render:=true    — open the PyBullet GUI window (default: false)
-    episodes:=1     — number of evaluation episodes to run (not used at launch
-                      time; consumed by individual test scripts)
+    ros2 launch skyshade skyshade_sim.launch.py render:=true
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo
+from launch.actions import DeclareLaunchArgument, LogInfo, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -25,6 +20,14 @@ def generate_launch_description():
         "render",
         default_value="false",
         description="Open PyBullet GUI window",
+    )
+
+    sim_process = ExecuteProcess(
+        cmd=[
+            "python3",
+            "/mnt/c/Users/Azzaw/OneDrive - UTS/Documents/Uni/Year 4/AI in Robotics/SkyShade/run_sim.py",
+        ],
+        output="screen",
     )
 
     perception_node = Node(
@@ -59,9 +62,10 @@ def generate_launch_description():
     return LaunchDescription([
         render_arg,
         LogInfo(msg="=== SkyShade simulation starting ==="),
+        sim_process,
         perception_node,
         flight_node,
         env_decision_node,
         nav_safety_node,
-        LogInfo(msg="=== All four nodes launched ==="),
+        LogInfo(msg="=== PyBullet simulation and all four nodes launched ==="),
     ])

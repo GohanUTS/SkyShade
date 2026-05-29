@@ -25,8 +25,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32, String
 
-from sub4_nav.policy_table import NavSafetyPolicy
-from sub4_nav.mdp import ACTION_NAMES, ACTION_CONTINUE
+from skyshade.sub4_nav.policy_table import NavSafetyPolicy
+from skyshade.sub4_nav.mdp import ACTION_NAMES, ACTION_CONTINUE
 
 SAFETY_HZ = 5.0
 

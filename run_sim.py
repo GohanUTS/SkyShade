@@ -37,16 +37,16 @@ try:
 except ImportError:
     sys.exit("pybullet not installed — run: pip install pybullet")
 
-from sub1_perception.distance_estimator import DistanceEstimator
-from sub1_perception.tracker import Tracker, CAMERA_RES, CAMERA_FOV, CONFIDENCE_THRESH
-from sub2_flight.policy import PIDFlightPolicy
-from sub2_flight.env.hover_env import (
+from skyshade.sub1_perception.distance_estimator import DistanceEstimator
+from skyshade.sub1_perception.tracker import Tracker, CAMERA_RES, CAMERA_FOV, CONFIDENCE_THRESH
+from skyshade.sub2_flight.policy import PIDFlightPolicy
+from skyshade.sub2_flight.env.hover_env import (
     TARGET_ALTITUDE, HOVER_FORCE_N, DRONE_MASS_KG,
     SIM_TIMESTEP, STEPS_PER_ACTION, LINEAR_DAMPING,
 )
-from sub3_env.classifier import UmbrellaClassifier
-from sub4_nav.policy_table import NavSafetyPolicy
-from sub4_nav.mdp import ACTION_NAMES
+from skyshade.sub3_env.classifier import UmbrellaClassifier
+from skyshade.sub4_nav.policy_table import NavSafetyPolicy
+from skyshade.sub4_nav.mdp import ACTION_NAMES
 
 CONTROL_HZ         = 30
 BATTERY_DRAIN_RATE = 0.5    # % per second

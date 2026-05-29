@@ -23,8 +23,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import Point
 from std_msgs.msg import Float32
 
-from sub1_perception.distance_estimator import DistanceEstimator
-from sub1_perception.tracker import Tracker, CAMERA_FPS, CONFIDENCE_THRESH
+from skyshade.sub1_perception.distance_estimator import DistanceEstimator
+from skyshade.sub1_perception.tracker import Tracker, CAMERA_FPS, CONFIDENCE_THRESH
 
 
 class PerceptionNode(Node):

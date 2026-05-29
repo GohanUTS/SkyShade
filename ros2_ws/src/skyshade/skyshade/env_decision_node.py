@@ -17,7 +17,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from sub3_env.classifier import UmbrellaClassifier
+from skyshade.sub3_env.classifier import UmbrellaClassifier
 
 DECISION_HZ = 1.0   # 1 decision per second is sufficient for weather
 

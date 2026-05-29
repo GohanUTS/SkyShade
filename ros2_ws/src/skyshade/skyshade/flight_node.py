@@ -22,7 +22,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Point, Twist
 from std_msgs.msg import String
 
-from sub2_flight.env.hover_env import TARGET_ALTITUDE
+from skyshade.sub2_flight.env.hover_env import TARGET_ALTITUDE
 
 CONTROL_HZ = 20.0
 MAX_VEL = 1.0        # m/s output clamp per axis
