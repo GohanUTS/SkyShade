@@ -166,6 +166,15 @@ skyshade/
 
 ## Running the Simulation
 
+### Standalone simulator
+
+```bash
+python3 run_sim.py
+python3 run_sim.py --scenario forest
+```
+
+The default `park` scenario shows the drone following the user in an open scene. The `forest` scenario sends the user along a wooded trail while the drone adds local tree-avoidance forces.
+
 ### Full pipeline (all four nodes at once)
 
 ```bash

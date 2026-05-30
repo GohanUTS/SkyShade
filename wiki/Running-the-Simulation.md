@@ -40,6 +40,7 @@ Runs for 120 s by default with a PyBullet GUI window. A HUD overlay shows time, 
 ```bash
 python run_sim.py --duration 60     # run for 60 s
 python run_sim.py --no-gui          # headless (no window)
+python run_sim.py --scenario forest # forest path with tree avoidance
 ```
 
 ---
