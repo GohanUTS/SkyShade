@@ -61,6 +61,15 @@ WEATHER_MAX_SECONDS = 20.0
 DEBUG_WEATHER_LINES = False
 SCENARIO_PARK = "park"
 SCENARIO_FOREST = "forest"
+SCENARIO_CHOICES = (SCENARIO_PARK, SCENARIO_FOREST)
+SCENARIO_LABELS = {
+    SCENARIO_PARK: "Park",
+    SCENARIO_FOREST: "Forest Trail",
+}
+SCENARIO_DESCRIPTIONS = {
+    SCENARIO_PARK: "Open park loop with light obstacles and figure-8 walking.",
+    SCENARIO_FOREST: "Long wooded trail with tree avoidance and path reset.",
+}
 AVOIDANCE_RADIUS = 0.75
 AVOIDANCE_GAIN = 4.5
 AVOIDANCE_MAX_FORCE = 5.5
@@ -73,6 +82,7 @@ POV_DISPLAY_SIZE = (960, 540)
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
+FOREST_WALK_SPEED = 0.65
 
 
 def figure8(t, scale=1.5):
@@ -83,9 +93,14 @@ def figure8(t, scale=1.5):
 
 
 def forest_walk(t):
-    x = FOREST_TRAIL_START_X + (t * 0.65) % FOREST_TRAIL_LENGTH
-    y = 0.55 * math.sin(t * 0.85) + 0.22 * math.sin(t * 1.7)
+    progress = (t * FOREST_WALK_SPEED) % FOREST_TRAIL_LENGTH
+    x = FOREST_TRAIL_START_X + progress
+    y = 0.55 * math.sin(progress * 0.85) + 0.22 * math.sin(progress * 1.7)
     return np.array([x, y, 0.0])
+
+
+def forest_lap_index(t):
+    return int((t * FOREST_WALK_SPEED) // FOREST_TRAIL_LENGTH)
 
 
 class RandomWeatherController:
@@ -596,6 +611,238 @@ def update_person(phys, person, user_pos, yaw, walk_phase):
         p.resetBasePositionAndOrientation(
             part["id"], pos.tolist(), quat, physicsClientId=phys,
         )
+
+
+class ScenarioLauncher:
+    def __init__(self, default_duration=120.0):
+        self.selection = None
+        self.default_duration = default_duration
+
+        self.root = tk.Tk()
+        self.root.title("SkyShade Launcher")
+        self.root.configure(bg="#0b1120")
+        self.root.geometry("760x520")
+        self.root.minsize(680, 460)
+        self.root.resizable(True, True)
+        self.root.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        self.scenario_var = tk.StringVar(value=SCENARIO_PARK)
+        self.duration_var = tk.StringVar(value=str(int(default_duration)))
+        self.gui_var = tk.BooleanVar(value=True)
+        self.error_var = tk.StringVar(value="")
+
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
+
+        frame = tk.Frame(self.root, bg="#0b1120", padx=28, pady=24)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(7, weight=1)
+
+        tk.Label(
+            frame,
+            text="SkyShade Simulation",
+            fg="#f8fafc",
+            bg="#0b1120",
+            font=("Arial", 26, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        tk.Label(
+            frame,
+            text="Choose a scenario to launch.",
+            fg="#94a3b8",
+            bg="#0b1120",
+            font=("Arial", 12),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(2, 16))
+
+        for row, scenario in enumerate(SCENARIO_CHOICES, start=2):
+            self._scenario_button(frame, row, scenario)
+
+        options = tk.Frame(frame, bg="#111c2e", padx=12, pady=12)
+        options.grid(row=4, column=0, sticky="ew", pady=(16, 0))
+        options.grid_columnconfigure(1, weight=1)
+
+        tk.Label(
+            options,
+            text="Duration",
+            fg="#cbd5e1",
+            bg="#111c2e",
+            font=("Arial", 10, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        duration_entry = tk.Entry(
+            options,
+            textvariable=self.duration_var,
+            bg="#020617",
+            fg="#f8fafc",
+            insertbackground="#f8fafc",
+            relief="flat",
+            font=("Arial", 11),
+            width=8,
+        )
+        duration_entry.grid(row=0, column=1, sticky="w")
+
+        tk.Label(
+            options,
+            text="seconds",
+            fg="#94a3b8",
+            bg="#111c2e",
+            font=("Arial", 10),
+            anchor="w",
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        tk.Checkbutton(
+            options,
+            text="Show PyBullet GUI and dashboard",
+            variable=self.gui_var,
+            bg="#111c2e",
+            fg="#cbd5e1",
+            selectcolor="#020617",
+            activebackground="#111c2e",
+            activeforeground="#f8fafc",
+            font=("Arial", 10),
+            anchor="w",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        tk.Label(
+            frame,
+            textvariable=self.error_var,
+            fg="#fecaca",
+            bg="#0b1120",
+            font=("Arial", 10, "bold"),
+            anchor="w",
+        ).grid(row=5, column=0, sticky="ew", pady=(8, 0))
+
+        actions = tk.Frame(frame, bg="#0b1120")
+        actions.grid(row=6, column=0, sticky="ew", pady=(16, 0))
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
+
+        tk.Button(
+            actions,
+            text="Launch",
+            command=self._launch,
+            bg="#2563eb",
+            fg="#eff6ff",
+            activebackground="#1d4ed8",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=14,
+            pady=10,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        tk.Button(
+            actions,
+            text="Cancel",
+            command=self._cancel,
+            bg="#1e293b",
+            fg="#cbd5e1",
+            activebackground="#334155",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("Arial", 12, "bold"),
+            padx=14,
+            pady=10,
+        ).grid(row=0, column=1, sticky="ew")
+
+    def _scenario_button(self, parent, row, scenario):
+        shell = tk.Frame(parent, bg="#111c2e", padx=10, pady=10)
+        shell.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+        shell.grid_columnconfigure(1, weight=1)
+
+        button = tk.Radiobutton(
+            shell,
+            text=SCENARIO_LABELS[scenario],
+            value=scenario,
+            variable=self.scenario_var,
+            indicatoron=False,
+            bg="#111c2e",
+            fg="#f8fafc",
+            selectcolor="#075985",
+            activebackground="#1e293b",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("Arial", 13, "bold"),
+            anchor="center",
+            padx=14,
+            pady=12,
+            width=15,
+        )
+        button.grid(row=0, column=0, sticky="nsw", padx=(0, 14))
+
+        tk.Label(
+            shell,
+            text=SCENARIO_DESCRIPTIONS[scenario],
+            fg="#94a3b8",
+            bg="#111c2e",
+            font=("Arial", 11),
+            anchor="w",
+            wraplength=460,
+            justify="left",
+        ).grid(row=0, column=1, sticky="ew")
+
+    def _launch(self):
+        try:
+            duration = float(self.duration_var.get())
+            if duration <= 0:
+                raise ValueError
+        except ValueError:
+            self.error_var.set("Enter a positive duration in seconds.")
+            return
+
+        self.selection = {
+            "scenario": self.scenario_var.get(),
+            "duration": duration,
+            "gui": bool(self.gui_var.get()),
+        }
+        self.root.destroy()
+
+    def _cancel(self):
+        self.selection = None
+        self.root.destroy()
+
+    def show(self):
+        self.root.mainloop()
+        return self.selection
+
+
+def choose_launch_settings(default_duration=120.0):
+    if tk is None:
+        return {
+            "scenario": SCENARIO_PARK,
+            "duration": default_duration,
+            "gui": True,
+        }
+
+    try:
+        return ScenarioLauncher(default_duration).show()
+    except tk.TclError as exc:
+        print(f"Launcher unavailable: {exc}")
+        return {
+            "scenario": SCENARIO_PARK,
+            "duration": default_duration,
+            "gui": True,
+        }
+
+
+def launch_sim_process(settings):
+    cmd = [
+        sys.executable,
+        os.path.abspath(__file__),
+        "--scenario",
+        settings["scenario"],
+        "--duration",
+        str(settings["duration"]),
+    ]
+    if not settings["gui"]:
+        cmd.append("--no-gui")
+
+    print("Launching:", " ".join(cmd))
+    subprocess.Popen(cmd, cwd=os.path.dirname(os.path.abspath(__file__)))
 
 
 class TelemetryWindow:
@@ -1463,7 +1710,8 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
     p.setTimeStep(SIM_TIMESTEP, physicsClientId=phys)
 
     if gui:
-        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0, physicsClientId=phys)
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1, physicsClientId=phys)
+        p.configureDebugVisualizer(p.COV_ENABLE_MOUSE_PICKING, 1, physicsClientId=phys)
         if scenario == SCENARIO_FOREST:
             p.resetDebugVisualizerCamera(
                 cameraDistance=14.0, cameraYaw=35, cameraPitch=-34,
@@ -1524,6 +1772,7 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
     confidence    = 0.0
     user_pos      = initial_user_pos.copy()
     prev_user_pos = user_pos.copy()
+    forest_lap    = forest_lap_index(0.0)
     user_velocity = np.zeros(3, dtype=float)
     gimbal_target = np.array([user_pos[0], user_pos[1], USER_MARKER_HEIGHT], dtype=float)
     dt            = STEPS_PER_ACTION * SIM_TIMESTEP
@@ -1555,7 +1804,34 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
 
             # ── User path ────────────────────────────────────────────────────
             user_pos = scenario_user_position(scenario, t_wall)
-            user_delta = user_pos - prev_user_pos
+            wrapped_forest_lap = False
+            if scenario == SCENARIO_FOREST:
+                next_lap = forest_lap_index(t_wall)
+                wrapped_forest_lap = next_lap != forest_lap
+                forest_lap = next_lap
+                if wrapped_forest_lap:
+                    prev_user_pos = user_pos.copy()
+                    user_velocity = np.zeros(3, dtype=float)
+                    gimbal_target = np.array(
+                        [user_pos[0], user_pos[1], USER_MARKER_HEIGHT],
+                        dtype=float,
+                    )
+                    reset_pos = [
+                        user_pos[0],
+                        user_pos[1],
+                        TARGET_ALTITUDE,
+                    ]
+                    p.resetBasePositionAndOrientation(
+                        drone_id, reset_pos, [0, 0, 0, 1],
+                        physicsClientId=phys,
+                    )
+                    p.resetBaseVelocity(
+                        drone_id, [0, 0, 0], [0, 0, 0],
+                        physicsClientId=phys,
+                    )
+                    pid.reset()
+
+            user_delta = np.zeros(3, dtype=float) if wrapped_forest_lap else user_pos - prev_user_pos
             user_velocity = user_delta / max(action_dt, 1e-6)
             user_yaw = math.atan2(user_delta[1], user_delta[0]) if np.linalg.norm(user_delta[:2]) > 1e-4 else 0.0
             update_person(phys, person_parts, user_pos, user_yaw, t_wall * 4.5)
@@ -1703,13 +1979,31 @@ def main():
     ap.add_argument("--duration", type=float, default=120.0)
     ap.add_argument("--no-gui",   action="store_true")
     ap.add_argument(
+        "--launcher",
+        action="store_true",
+        help="Show the scenario launcher even if a scenario is provided.",
+    )
+    ap.add_argument(
         "--scenario",
-        choices=[SCENARIO_PARK, SCENARIO_FOREST],
-        default=SCENARIO_PARK,
+        choices=SCENARIO_CHOICES,
+        default=None,
         help="Simulation scene to run.",
     )
     args = ap.parse_args()
-    run(duration=args.duration, gui=not args.no_gui, scenario=args.scenario)
+
+    if args.launcher or (args.scenario is None and not args.no_gui):
+        settings = choose_launch_settings(args.duration)
+        if settings is None:
+            print("Launch cancelled.")
+            return
+        launch_sim_process(settings)
+        return
+
+    run(
+        duration=args.duration,
+        gui=not args.no_gui,
+        scenario=args.scenario or SCENARIO_PARK,
+    )
 
 
 if __name__ == "__main__":
