@@ -41,7 +41,13 @@ class NavEvalWorker(threading.Thread):
             from stable_baselines3 import SAC
             from sub4_nav.obstacle_env import ObstacleNavEnv, GOAL_R
 
-            model = SAC.load(_MODEL_PATH)
+            try:
+                model = SAC.load(_MODEL_PATH)
+            except Exception:
+                self._q.put(("eval_error",
+                             "Model file contains old PPO weights — incompatible with SAC. "
+                             "Click '🔄 Retrain from Scratch' on the Sub-4 Nav tab to train a new SAC model."))
+                return
 
             rewards, successes, all_paths = [], [], []
 

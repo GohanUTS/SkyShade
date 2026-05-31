@@ -3061,10 +3061,16 @@ class TrainingGroundsHub:
             k = msg[0]
             if k == "progress":
                 _, ts, mr, viz = msg
-                self._nav_history.append((ts, mr))
-                self._nav_step = ts
-                self._nav_viz  = viz
-                changed_nav = True
+                if ts == -1:
+                    # Worker detected old PPO model — deleted it, restarting fresh
+                    self._nav_status_var.set(
+                        "⚠ Old PPO model was incompatible with SAC — deleted automatically. "
+                        "Training fresh SAC model from scratch…")
+                else:
+                    self._nav_history.append((ts, mr))
+                    self._nav_step = ts
+                    self._nav_viz  = viz
+                    changed_nav = True
             elif k in ("done", "stopped"):
                 parts = msg[1:]
                 _path, steps = parts[0], parts[1]

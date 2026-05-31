@@ -120,14 +120,21 @@ class NavTrainingWorker(threading.Thread):
             np.random.seed(42)
             env = Monitor(ObstacleNavEnv())
 
-            # ── Warm-start: load existing model if present ────────────────────
+            # ── Warm-start: load existing SAC model if present ───────────────
             zip_path = self.OUTPUT_PATH + ".zip"
             warm     = os.path.exists(zip_path)
+            model    = None
             if warm:
-                # SAC warm-start: load weights, reduce learning rate for fine-tuning
-                model = SAC.load(self.OUTPUT_PATH, env=env,
-                                 learning_rate=5e-5)
-            else:
+                try:
+                    # If this file was trained with old PPO, SAC.load() will raise —
+                    # catch it and fall back to a fresh SAC model.
+                    model = SAC.load(self.OUTPUT_PATH, env=env,
+                                     learning_rate=5e-5)
+                    q_ref.put(("progress", 0, 1, 0.0))
+                except Exception:
+                    warm = False
+                    q_ref.put(("progress", -1, 1, 0.0))   # -1 signals incompatible file
+            if model is None:
                 model = SAC(
                     "MlpPolicy", env,
                     learning_rate    = 3e-4,
@@ -143,6 +150,12 @@ class NavTrainingWorker(threading.Thread):
                     seed             = 42,
                     verbose          = 0,
                 )
+                # Remove incompatible old file so next run doesn't try to load it
+                try:
+                    if os.path.exists(zip_path):
+                        os.remove(zip_path)
+                except Exception:
+                    pass
 
             cb = _Callback()
             model.learn(
