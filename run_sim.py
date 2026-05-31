@@ -1502,9 +1502,9 @@ class FlightTrainingWindow:
 _MPL_BG      = "#020617"
 _MPL_FIG_BG  = "#07111f"
 _MPL_EDGE    = "#1f3a5f"
-_MPL_TICK    = "#475569"
-_MPL_LABEL   = "#64748b"
-_MPL_TITLE   = "#60a5fa"
+_MPL_TICK    = "#94a3b8"   # slate-400 — bright enough to read on dark bg
+_MPL_LABEL   = "#cbd5e1"   # slate-300 — axis label colour
+_MPL_TITLE   = "#7dd3fc"   # sky-300  — chart title colour
 _MPL_GRID    = "#1e3a5f"
 
 
@@ -1513,12 +1513,12 @@ def _mpl_dark_axes(ax, title="", xlabel="", ylabel=""):
     ax.set_facecolor(_MPL_BG)
     for sp in ax.spines.values():
         sp.set_color(_MPL_EDGE)
-    ax.tick_params(colors=_MPL_TICK, labelsize=8)
+    ax.tick_params(colors=_MPL_TICK, labelsize=11)
     ax.xaxis.label.set_color(_MPL_LABEL)
     ax.yaxis.label.set_color(_MPL_LABEL)
-    ax.set_xlabel(xlabel, fontsize=9)
-    ax.set_ylabel(ylabel, fontsize=9)
-    ax.set_title(title, color=_MPL_TITLE, fontsize=10, pad=5)
+    ax.set_xlabel(xlabel, fontsize=11)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.set_title(title, color=_MPL_TITLE, fontsize=12, pad=6)
     ax.grid(True, color=_MPL_GRID, linestyle="--", alpha=0.4)
 
 
@@ -1882,15 +1882,15 @@ class TrainingGroundsHub:
     def _style_3d_ax(ax, title: str = ""):
         """Apply SkyShade dark theme to a 3D Axes3D instance."""
         ax.set_facecolor(_MPL_BG)
-        ax.set_title(title, color=_MPL_TITLE, fontsize=10, pad=4)
+        ax.set_title(title, color=_MPL_TITLE, fontsize=12, pad=5)
         for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
             pane.fill = True
             pane.set_facecolor("#07111f")
             pane.set_edgecolor("#1e3a5f")
-        ax.tick_params(colors="#475569", labelsize=7)
-        ax.xaxis.label.set_color("#475569")
-        ax.yaxis.label.set_color("#475569")
-        ax.zaxis.label.set_color("#475569")
+        ax.tick_params(colors="#94a3b8", labelsize=9)
+        ax.xaxis.label.set_color("#94a3b8")
+        ax.yaxis.label.set_color("#94a3b8")
+        ax.zaxis.label.set_color("#94a3b8")
         ax.grid(True, color="#1e3a5f", lw=0.4)
 
     def _model_label(self, sub: int) -> str:
@@ -2248,9 +2248,9 @@ class TrainingGroundsHub:
         # Stage / progress overlay text (top-left of 3D pane)
         title_txt, desc_txt = STAGE_DESC.get(stage, ("", ""))
         ax.text2D(0.02, 0.97, title_txt, transform=ax.transAxes,
-                  color="#60a5fa", fontsize=8, fontweight="bold", va="top")
-        ax.text2D(0.02, 0.86, desc_txt, transform=ax.transAxes,
-                  color="#94a3b8", fontsize=7, va="top")
+                  color="#7dd3fc", fontsize=10, fontweight="bold", va="top")
+        ax.text2D(0.02, 0.84, desc_txt, transform=ax.transAxes,
+                  color="#cbd5e1", fontsize=8, va="top")
 
         # Efficiency banner (bottom centre of 3D pane)
         banner = self._sub2_efficiency or self._sub2_eval_result
@@ -2259,14 +2259,14 @@ class TrainingGroundsHub:
                    else "#f97316" if "⏹" in banner else "#f87171")
             ax.text2D(0.5, 0.02, banner,
                       transform=ax.transAxes, ha="center",
-                      color=col, fontsize=7, fontweight="bold")
+                      color=col, fontsize=9, fontweight="bold")
 
         ax.set_xlim(-ROOM_W, ROOM_W); ax.set_ylim(-ROOM_W, ROOM_W)
         ax.set_zlim(0, CEIL_H)
         ax.set_xticks([]); ax.set_yticks([])
         ax.set_zticks([0, TARGET_ALT, CEIL_H])
         ax.zaxis.set_ticklabels(["floor", f"{TARGET_ALT}m\nhover", f"{CEIL_H}m"],
-                                fontsize=6, color="#475569")
+                                fontsize=8, color="#94a3b8")
         self._sub2_azim = (self._sub2_azim + 0.35) % 360
         ax.view_init(elev=20, azim=self._sub2_azim)
 
@@ -2283,7 +2283,7 @@ class TrainingGroundsHub:
                       "  Stage 2 (500k–1M) gusty wind\n"
                       "  Stage 3 (1M–1.5M) walking user",
                       ha="center", va="center", color="#64748b",
-                      transform=ax_r.transAxes, fontsize=8)
+                      transform=ax_r.transAxes, fontsize=10)
         else:
             stage_col = {1: "#3b82f6", 2: "#ec4899", 3: "#8b5cf6"}
             pts = self._sub2_history[::max(1, len(self._sub2_history) // 400)]
@@ -2323,7 +2323,7 @@ class TrainingGroundsHub:
                 ax_r.set_title(
                     f"PPO Reward  ·  {pct:.0f}% done  ·  ~{eta_str} left  "
                     f"·  {rate:.0f} steps/s",
-                    color="#94a3b8", fontsize=8, pad=4)
+                    color="#94a3b8", fontsize=10, pad=5)
 
             # Trend arrow
             if len(ys) >= 20:
@@ -2331,14 +2331,14 @@ class TrainingGroundsHub:
                 t_col = "#22c55e" if trend > 0 else "#f97316"
                 t_sym = "↑ improving" if trend > 0 else "→ flat"
                 ax_r.text(0.98, 0.04, t_sym, transform=ax_r.transAxes,
-                          ha="right", color=t_col, fontsize=9, fontweight="bold")
+                          ha="right", color=t_col, fontsize=11, fontweight="bold")
 
             ax_r.legend(handles=[
                 Patch(color="#3b82f6", label="S1 calm"),
                 Patch(color="#ec4899", label="S2 wind"),
                 Patch(color="#8b5cf6", label="S3 walk"),
             ], facecolor="#0f172a", edgecolor=_MPL_EDGE, labelcolor="#94a3b8",
-               fontsize=7, loc="upper left")
+               fontsize=9, loc="upper left")
 
         self._sub2_canvas.draw_idle()
 
@@ -2434,7 +2434,7 @@ class TrainingGroundsHub:
             ax.scatter([-hw+0.5], [0], [NAV_ALT], color="#7dd3fc", s=120,
                        marker="o", depthshade=False)
             ax.text2D(0.5, 0.05, "Click 'Train Navigation' — drone appears live",
-                      transform=ax.transAxes, ha="center", color="#475569", fontsize=7)
+                      transform=ax.transAxes, ha="center", color="#94a3b8", fontsize=9)
 
         # Evaluation path overlay (bright green — best eval episode)
         if self._nav_eval_path:
@@ -2449,13 +2449,13 @@ class TrainingGroundsHub:
                    else "#f97316" if "⏹" in nav_banner else "#f87171")
             ax.text2D(0.5, 0.01, nav_banner,
                       transform=ax.transAxes, ha="center",
-                      color=col, fontsize=7, fontweight="bold")
+                      color=col, fontsize=9, fontweight="bold")
 
         ax.set_xlim(-hw, hw); ax.set_ylim(-hd, hd); ax.set_zlim(0, WALL_H)
         ax.set_xticks([]); ax.set_yticks([])
         ax.set_zticks([0, NAV_ALT, WALL_H])
         ax.zaxis.set_ticklabels(["0", f"{NAV_ALT}m", f"{WALL_H}m"],
-                                fontsize=7, color="#475569")
+                                fontsize=8, color="#94a3b8")
         self._sub4_azim = (self._sub4_azim + 0.4) % 360
         ax.view_init(elev=20, azim=self._sub4_azim)
 
