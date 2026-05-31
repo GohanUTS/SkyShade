@@ -3,24 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="description"
-        content="Deformable Neural Radiance Fields creates free-viewpoint portraits (nerfies) from casually captured videos.">
-  <meta name="keywords" content="Nerfies, D-NeRF, NeRF">
+        content="SkyShade is an AI robotics project using ROS2 and PyBullet for an autonomous drone umbrella simulation.">
+  <meta name="keywords" content="SkyShade, ROS2, PyBullet, Robotics, AI, UTS">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Nerfies: Deformable Neural Radiance Fields</title>
-
-  <!-- Global site tag (gtag.js) - Google Analytics -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=G-PYVRSFMDRL"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-
-    function gtag() {
-      dataLayer.push(arguments);
-    }
-
-    gtag('js', new Date());
-
-    gtag('config', 'G-PYVRSFMDRL');
-  </script>
+  <title>SkyShade: AI Robotics Simulation</title>
 
   <link href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro"
         rel="stylesheet">
@@ -40,6 +26,7 @@
   <script src="./static/js/bulma-slider.min.js"></script>
   <script src="./static/js/index.js"></script>
 </head>
+
 <body>
 
 <nav class="navbar" role="navigation" aria-label="main navigation">
@@ -50,35 +37,27 @@
       <span aria-hidden="true"></span>
     </a>
   </div>
+
   <div class="navbar-menu">
     <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
-      <a class="navbar-item" href="https://keunhong.com">
-      <span class="icon">
-          <i class="fas fa-home"></i>
-      </span>
-      </a>
+      <a class="navbar-item" href="#overview">Overview</a>
+      <a class="navbar-item" href="#architecture">Architecture</a>
+      <a class="navbar-item" href="#running">Running</a>
+      <a class="navbar-item" href="#subsystems">Subsystems</a>
+      <a class="navbar-item" href="#validation">Validation</a>
+      <a class="navbar-item" href="#issues">Known Issues</a>
 
       <div class="navbar-item has-dropdown is-hoverable">
-        <a class="navbar-link">
-          More Research
-        </a>
+        <a class="navbar-link">Wiki</a>
         <div class="navbar-dropdown">
-          <a class="navbar-item" href="https://hypernerf.github.io">
-            HyperNeRF
-          </a>
-          <a class="navbar-item" href="https://nerfies.github.io">
-            Nerfies
-          </a>
-          <a class="navbar-item" href="https://latentfusion.github.io">
-            LatentFusion
-          </a>
-          <a class="navbar-item" href="https://photoshape.github.io">
-            PhotoShape
-          </a>
+          <a class="navbar-item" href="wiki/Project-Overview.md">Project Overview</a>
+          <a class="navbar-item" href="wiki/Architecture.md">System Architecture</a>
+          <a class="navbar-item" href="wiki/Running-the-Simulation.md">Running the Simulation</a>
+          <a class="navbar-item" href="wiki/Validation-and-Results.md">Validation and Results</a>
+          <a class="navbar-item" href="wiki/Known-Issues-and-Decisions.md">Known Issues</a>
         </div>
       </div>
     </div>
-
   </div>
 </nav>
 
@@ -88,86 +67,67 @@
     <div class="container is-max-desktop">
       <div class="columns is-centered">
         <div class="column has-text-centered">
-          <h1 class="title is-1 publication-title">Nerfies: Deformable Neural Radiance Fields</h1>
-          <div class="is-size-5 publication-authors">
-            <span class="author-block">
-              <a href="https://keunhong.com">Keunhong Park</a><sup>1</sup>,</span>
-            <span class="author-block">
-              <a href="https://utkarshsinha.com">Utkarsh Sinha</a><sup>2</sup>,</span>
-            <span class="author-block">
-              <a href="https://jonbarron.info">Jonathan T. Barron</a><sup>2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="http://sofienbouaziz.com">Sofien Bouaziz</a><sup>2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="https://www.danbgoldman.com">Dan B Goldman</a><sup>2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="https://homes.cs.washington.edu/~seitz/">Steven M. Seitz</a><sup>1,2</sup>,
-            </span>
-            <span class="author-block">
-              <a href="http://www.ricardomartinbrualla.com">Ricardo Martin-Brualla</a><sup>2</sup>
-            </span>
-          </div>
+          <h1 class="title is-1 publication-title">SkyShade</h1>
+          <h2 class="subtitle is-3">
+            AI Robotics Simulation for an Autonomous Drone Umbrella System
+          </h2>
 
           <div class="is-size-5 publication-authors">
-            <span class="author-block"><sup>1</sup>University of Washington,</span>
-            <span class="author-block"><sup>2</sup>Google Research</span>
+            <span class="author-block">AI in Robotics Project</span>
+            <span class="author-block"> · </span>
+            <span class="author-block">University of Technology Sydney</span>
           </div>
 
           <div class="column has-text-centered">
             <div class="publication-links">
-              <!-- PDF Link. -->
               <span class="link-block">
-                <a href="https://arxiv.org/pdf/2011.12948"
+                <a href="https://github.com/GohanUTS/SkyShade"
                    class="external-link button is-normal is-rounded is-dark">
                   <span class="icon">
-                      <i class="fas fa-file-pdf"></i>
-                  </span>
-                  <span>Paper</span>
-                </a>
-              </span>
-              <span class="link-block">
-                <a href="https://arxiv.org/abs/2011.12948"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="ai ai-arxiv"></i>
-                  </span>
-                  <span>arXiv</span>
-                </a>
-              </span>
-              <!-- Video Link. -->
-              <span class="link-block">
-                <a href="https://www.youtube.com/watch?v=MrKrnHhk8IA"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fab fa-youtube"></i>
-                  </span>
-                  <span>Video</span>
-                </a>
-              </span>
-              <!-- Code Link. -->
-              <span class="link-block">
-                <a href="https://github.com/google/nerfies"
-                   class="external-link button is-normal is-rounded is-dark">
-                  <span class="icon">
-                      <i class="fab fa-github"></i>
+                    <i class="fab fa-github"></i>
                   </span>
                   <span>Code</span>
-                  </a>
+                </a>
               </span>
-              <!-- Dataset Link. -->
+
               <span class="link-block">
-                <a href="https://github.com/google/nerfies/releases/tag/0.1"
+                <a href="wiki/Home.md"
                    class="external-link button is-normal is-rounded is-dark">
                   <span class="icon">
-                      <i class="far fa-images"></i>
+                    <i class="fas fa-book"></i>
                   </span>
-                  <span>Data</span>
-                  </a>
-            </div>
+                  <span>Wiki</span>
+                </a>
+              </span>
 
+              <span class="link-block">
+                <a href="#running"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                    <i class="fas fa-terminal"></i>
+                  </span>
+                  <span>Run</span>
+                </a>
+              </span>
+
+              <span class="link-block">
+                <a href="#validation"
+                   class="external-link button is-normal is-rounded is-dark">
+                  <span class="icon">
+                    <i class="fas fa-check-circle"></i>
+                  </span>
+                  <span>Results</span>
+                </a>
+              </span>
+            </div>
+          </div>
+
+          <div class="content has-text-centered">
+            <p>
+              SkyShade combines perception, flight control, environmental
+              decision-making and navigation safety into a modular ROS2 and
+              PyBullet robotics simulation.
+            </p>
           </div>
         </div>
       </div>
@@ -175,281 +135,300 @@
   </div>
 </section>
 
+
 <section class="hero teaser">
   <div class="container is-max-desktop">
     <div class="hero-body">
-      <video id="teaser" autoplay muted loop playsinline height="100%">
-        <source src="./static/videos/teaser.mp4"
-                type="video/mp4">
-      </video>
       <h2 class="subtitle has-text-centered">
-        <span class="dnerf">Nerfies</span> turns selfie videos from your phone into
-        free-viewpoint
-        portraits.
+        A simulated drone follows a user, monitors environmental conditions,
+        and decides when to deploy or stow an umbrella canopy.
       </h2>
     </div>
   </div>
 </section>
 
 
-<section class="hero is-light is-small">
-  <div class="hero-body">
-    <div class="container">
-      <div id="results-carousel" class="carousel results-carousel">
-        <div class="item item-steve">
-          <video poster="" id="steve" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/steve.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-chair-tp">
-          <video poster="" id="chair-tp" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/chair-tp.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-shiba">
-          <video poster="" id="shiba" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/shiba.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-fullbody">
-          <video poster="" id="fullbody" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/fullbody.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-blueshirt">
-          <video poster="" id="blueshirt" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/blueshirt.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-mask">
-          <video poster="" id="mask" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/mask.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-coffee">
-          <video poster="" id="coffee" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/coffee.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <div class="item item-toby">
-          <video poster="" id="toby" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/toby2.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<section class="section">
+<section class="section" id="overview">
   <div class="container is-max-desktop">
-    <!-- Abstract. -->
     <div class="columns is-centered has-text-centered">
       <div class="column is-four-fifths">
-        <h2 class="title is-3">Abstract</h2>
+        <h2 class="title is-3">Project Overview</h2>
         <div class="content has-text-justified">
           <p>
-            We present the first method capable of photorealistically reconstructing a non-rigidly
-            deforming scene using photos/videos captured casually from mobile phones.
+            SkyShade is an AI robotics project that models an autonomous drone
+            umbrella system. The aim is to simulate a drone that can detect and
+            follow a user, maintain stable flight, monitor weather conditions,
+            and apply safety decisions during operation.
           </p>
           <p>
-            Our approach augments neural radiance fields
-            (NeRF) by optimizing an
-            additional continuous volumetric deformation field that warps each observed point into a
-            canonical 5D NeRF.
-            We observe that these NeRF-like deformation fields are prone to local minima, and
-            propose a coarse-to-fine optimization method for coordinate-based models that allows for
-            more robust optimization.
-            By adapting principles from geometry processing and physical simulation to NeRF-like
-            models, we propose an elastic regularization of the deformation field that further
-            improves robustness.
+            The project uses PyBullet for simulation and ROS2 for modular
+            communication between subsystems. Instead of building one large
+            script, the system is divided into smaller nodes that represent
+            realistic robotics modules.
           </p>
           <p>
-            We show that <span class="dnerf">Nerfies</span> can turn casually captured selfie
-            photos/videos into deformable NeRF
-            models that allow for photorealistic renderings of the subject from arbitrary
-            viewpoints, which we dub <i>"nerfies"</i>. We evaluate our method by collecting data
-            using a
-            rig with two mobile phones that take time-synchronized photos, yielding train/validation
-            images of the same pose at different viewpoints. We show that our method faithfully
-            reconstructs non-rigidly deforming scenes and reproduces unseen views with high
-            fidelity.
+            The system is designed around four major subsystems: perception,
+            flight control, environmental decision-making, and navigation
+            safety. Each subsystem can be developed and tested separately before
+            being integrated into the full pipeline.
           </p>
         </div>
       </div>
     </div>
-    <!--/ Abstract. -->
-
-    <!-- Paper video. -->
-    <div class="columns is-centered has-text-centered">
-      <div class="column is-four-fifths">
-        <h2 class="title is-3">Video</h2>
-        <div class="publication-video">
-          <iframe src="https://www.youtube.com/embed/MrKrnHhk8IA?rel=0&amp;showinfo=0"
-                  frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
-        </div>
-      </div>
-    </div>
-    <!--/ Paper video. -->
   </div>
 </section>
 
 
-<section class="section">
+<section class="section" id="architecture">
   <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">System Architecture</h2>
+    <div class="content has-text-justified">
+      <p>
+        SkyShade is structured as a ROS2 system with four independent nodes.
+        These nodes publish and subscribe to shared topics, allowing each
+        subsystem to communicate without being tightly coupled to the internal
+        code of the others.
+      </p>
+
+      <pre><code>/perception_node        → publishes user position and tracking confidence
+/flight_node            → publishes flight command outputs
+/env_decision_node      → publishes umbrella deploy/stow commands
+/nav_safety_node        → publishes navigation safety overrides</code></pre>
+
+      <p>
+        The main ROS2 topics include user position, tracking confidence, flight
+        commands, umbrella commands, battery level, and navigation override.
+        This makes the project easier to debug because each data stream can be
+        inspected directly from the terminal.
+      </p>
+
+      <pre><code>/skyshade/user_position
+/skyshade/tracking_confidence
+/skyshade/flight_cmd
+/skyshade/umbrella_cmd
+/skyshade/nav_override
+/skyshade/battery_level</code></pre>
+
+      <p>
+        Full architecture notes are available in the
+        <a href="wiki/Architecture.md">System Architecture wiki page</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="running">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Running the Simulation</h2>
+    <div class="content has-text-justified">
+      <p>
+        The full ROS2 pipeline can be launched from the ROS workspace. The
+        workspace should be built and sourced before running the launch file.
+      </p>
+
+      <pre><code>cd ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch skyshade skyshade_sim.launch.py render:=true</code></pre>
+
+      <p>
+        To confirm that the ROS2 system is active, open a second terminal and
+        check the node and topic lists.
+      </p>
+
+      <pre><code>source install/setup.bash
+ros2 node list
+ros2 topic list
+ros2 topic echo /skyshade/umbrella_cmd</code></pre>
+
+      <p>
+        The standalone PyBullet simulation can also be run directly when only
+        the visual simulation is needed.
+      </p>
+
+      <pre><code>python3 run_sim.py</code></pre>
+
+      <p>
+        More detail is available in the
+        <a href="wiki/Running-the-Simulation.md">Running the Simulation wiki page</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="subsystems">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Subsystems</h2>
 
     <div class="columns is-centered">
-
-      <!-- Visual Effects. -->
       <div class="column">
         <div class="content">
-          <h2 class="title is-3">Visual Effects</h2>
+          <h3 class="title is-4">Sub-1: Perception</h3>
           <p>
-            Using <i>nerfies</i> you can create fun visual effects. This Dolly zoom effect
-            would be impossible without nerfies since it would require going through a wall.
+            The perception subsystem detects the simulated user from the
+            virtual camera feed. It estimates the user's relative position and
+            publishes both position and tracking confidence to ROS2 topics.
           </p>
-          <video id="dollyzoom" autoplay controls muted loop playsinline height="100%">
-            <source src="./static/videos/dollyzoom-stacked.mp4"
-                    type="video/mp4">
-          </video>
+          <p>
+            The approach uses colour-based marker tracking, distance estimation
+            and smoothing to reduce noisy frame-to-frame movement.
+          </p>
+          <p>
+            <a href="wiki/Sub-1-Perception.md">Read the perception wiki page</a>
+          </p>
         </div>
       </div>
-      <!--/ Visual Effects. -->
 
-      <!-- Matting. -->
       <div class="column">
-        <h2 class="title is-3">Matting</h2>
-        <div class="columns is-centered">
-          <div class="column content">
-            <p>
-              As a byproduct of our method, we can also solve the matting problem by ignoring
-              samples that fall outside of a bounding box during rendering.
-            </p>
-            <video id="matting-video" controls playsinline height="100%">
-              <source src="./static/videos/matting.mp4"
-                      type="video/mp4">
-            </video>
-          </div>
-
+        <div class="content">
+          <h3 class="title is-4">Sub-2: Flight Control</h3>
+          <p>
+            The flight control subsystem receives the user position estimate and
+            produces flight commands. A PID controller is used at runtime to
+            help the drone follow the user while maintaining a target altitude.
+          </p>
+          <p>
+            A trained Q-learning policy is kept as an archived model artefact,
+            while the integrated simulation uses the PID controller for stable
+            behaviour.
+          </p>
+          <p>
+            <a href="wiki/Sub-2-Flight-Control.md">Read the flight control wiki page</a>
+          </p>
         </div>
       </div>
     </div>
-    <!--/ Matting. -->
 
-    <!-- Animation. -->
     <div class="columns is-centered">
-      <div class="column is-full-width">
-        <h2 class="title is-3">Animation</h2>
-
-        <!-- Interpolating. -->
-        <h3 class="title is-4">Interpolating states</h3>
-        <div class="content has-text-justified">
+      <div class="column">
+        <div class="content">
+          <h3 class="title is-4">Sub-3: Environmental Decision</h3>
           <p>
-            We can also animate the scene by interpolating the deformation latent codes of two input
-            frames. Use the slider here to linearly interpolate between the left frame and the right
-            frame.
+            The environmental decision subsystem reads simulated weather sensor
+            values such as light, rain and wind. It uses a trained SVM
+            classifier to decide whether the umbrella should be deployed or
+            stowed.
+          </p>
+          <p>
+            The classifier also uses short-term decision history to reduce
+            rapid switching between states.
+          </p>
+          <p>
+            <a href="wiki/Sub-3-Environmental-Decision.md">Read the environmental decision wiki page</a>
           </p>
         </div>
-        <div class="columns is-vcentered interpolation-panel">
-          <div class="column is-3 has-text-centered">
-            <img src="./static/images/interpolate_start.jpg"
-                 class="interpolation-image"
-                 alt="Interpolate start reference image."/>
-            <p>Start Frame</p>
-          </div>
-          <div class="column interpolation-video-column">
-            <div id="interpolation-image-wrapper">
-              Loading...
-            </div>
-            <input class="slider is-fullwidth is-large is-info"
-                   id="interpolation-slider"
-                   step="1" min="0" max="100" value="0" type="range">
-          </div>
-          <div class="column is-3 has-text-centered">
-            <img src="./static/images/interpolate_end.jpg"
-                 class="interpolation-image"
-                 alt="Interpolation end reference image."/>
-            <p class="is-bold">End Frame</p>
-          </div>
-        </div>
-        <br/>
-        <!--/ Interpolating. -->
-
-        <!-- Re-rendering. -->
-        <h3 class="title is-4">Re-rendering the input video</h3>
-        <div class="content has-text-justified">
-          <p>
-            Using <span class="dnerf">Nerfies</span>, you can re-render a video from a novel
-            viewpoint such as a stabilized camera by playing back the training deformations.
-          </p>
-        </div>
-        <div class="content has-text-centered">
-          <video id="replay-video"
-                 controls
-                 muted
-                 preload
-                 playsinline
-                 width="75%">
-            <source src="./static/videos/replay.mp4"
-                    type="video/mp4">
-          </video>
-        </div>
-        <!--/ Re-rendering. -->
-
       </div>
-    </div>
-    <!--/ Animation. -->
 
-
-    <!-- Concurrent Work. -->
-    <div class="columns is-centered">
-      <div class="column is-full-width">
-        <h2 class="title is-3">Related Links</h2>
-
-        <div class="content has-text-justified">
+      <div class="column">
+        <div class="content">
+          <h3 class="title is-4">Sub-4: Navigation Safety</h3>
           <p>
-            There's a lot of excellent work that was introduced around the same time as ours.
+            The navigation safety subsystem monitors high-level safety
+            conditions such as battery level and distance from home. It can
+            allow normal flight, trigger return-to-home, or request immediate
+            landing.
           </p>
           <p>
-            <a href="https://arxiv.org/abs/2104.09125">Progressive Encoding for Neural Optimization</a> introduces an idea similar to our windowed position encoding for coarse-to-fine optimization.
+            The policy is generated offline using an MDP and value iteration,
+            then loaded at runtime by the ROS2 node.
           </p>
           <p>
-            <a href="https://www.albertpumarola.com/research/D-NeRF/index.html">D-NeRF</a> and <a href="https://gvv.mpi-inf.mpg.de/projects/nonrigid_nerf/">NR-NeRF</a>
-            both use deformation fields to model non-rigid scenes.
-          </p>
-          <p>
-            Some works model videos with a NeRF by directly modulating the density, such as <a href="https://video-nerf.github.io/">Video-NeRF</a>, <a href="https://www.cs.cornell.edu/~zl548/NSFF/">NSFF</a>, and <a href="https://neural-3d-video.github.io/">DyNeRF</a>
-          </p>
-          <p>
-            There are probably many more by the time you are reading this. Check out <a href="https://dellaert.github.io/NeRF/">Frank Dellart's survey on recent NeRF papers</a>, and <a href="https://github.com/yenchenlin/awesome-NeRF">Yen-Chen Lin's curated list of NeRF papers</a>.
+            <a href="wiki/Sub-4-Navigation-Safety.md">Read the navigation safety wiki page</a>
           </p>
         </div>
       </div>
     </div>
-    <!--/ Concurrent Work. -->
-
   </div>
 </section>
 
 
-<section class="section" id="BibTeX">
-  <div class="container is-max-desktop content">
-    <h2 class="title">BibTeX</h2>
-    <pre><code>@article{park2021nerfies,
-  author    = {Park, Keunhong and Sinha, Utkarsh and Barron, Jonathan T. and Bouaziz, Sofien and Goldman, Dan B and Seitz, Steven M. and Martin-Brualla, Ricardo},
-  title     = {Nerfies: Deformable Neural Radiance Fields},
-  journal   = {ICCV},
-  year      = {2021},
-}</code></pre>
+<section class="section" id="validation">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Validation and Results</h2>
+    <div class="content has-text-justified">
+      <p>
+        The integrated ROS2 system was validated by launching the four nodes and
+        checking that each appeared in the ROS graph. Topic outputs were also
+        inspected to confirm that the system was actively publishing messages.
+      </p>
+
+      <pre><code>ros2 node list
+
+/env_decision_node
+/flight_node
+/nav_safety_node
+/perception_node</code></pre>
+
+      <pre><code>ros2 topic list
+
+/skyshade/battery_level
+/skyshade/flight_cmd
+/skyshade/nav_override
+/skyshade/tracking_confidence
+/skyshade/umbrella_cmd
+/skyshade/user_position</code></pre>
+
+      <p>
+        The environmental decision node was confirmed to publish live umbrella
+        commands such as:
+      </p>
+
+      <pre><code>ros2 topic echo /skyshade/umbrella_cmd
+
+data: STOW</code></pre>
+
+      <p>
+        Additional validation notes are available in the
+        <a href="wiki/Validation-and-Results.md">Validation and Results wiki page</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="issues">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Known Issues and Development Decisions</h2>
+    <div class="content has-text-justified">
+      <p>
+        During development, the project required several integration fixes. The
+        subsystem folders were moved into the ROS2 package so that installed ROS
+        nodes could import them correctly. The launch file was also updated so
+        the PyBullet simulation could be started together with the ROS2 nodes.
+      </p>
+      <p>
+        Other issues included Python package mismatches between Windows virtual
+        environments and Ubuntu/WSL ROS2 Python, missing trained model files,
+        PyBullet GUI behaviour, and GitHub Pages branch setup.
+      </p>
+      <p>
+        These issues are documented in the
+        <a href="wiki/Known-Issues-and-Decisions.md">Known Issues and Decisions wiki page</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="wiki">
+  <div class="container is-max-desktop">
+    <h2 class="title is-3 has-text-centered">Full Wiki Pages</h2>
+    <div class="content">
+      <ul>
+        <li><a href="wiki/Project-Overview.md">Project Overview</a></li>
+        <li><a href="wiki/Architecture.md">System Architecture</a></li>
+        <li><a href="wiki/Running-the-Simulation.md">Running the Simulation</a></li>
+        <li><a href="wiki/Sub-1-Perception.md">Sub-1: Perception</a></li>
+        <li><a href="wiki/Sub-2-Flight-Control.md">Sub-2: Flight Control</a></li>
+        <li><a href="wiki/Sub-3-Environmental-Decision.md">Sub-3: Environmental Decision</a></li>
+        <li><a href="wiki/Sub-4-Navigation-Safety.md">Sub-4: Navigation Safety</a></li>
+        <li><a href="wiki/Training-the-Models.md">Training the Models</a></li>
+        <li><a href="wiki/Validation-and-Results.md">Validation and Results</a></li>
+        <li><a href="wiki/Known-Issues-and-Decisions.md">Known Issues and Decisions</a></li>
+      </ul>
+    </div>
   </div>
 </section>
 
@@ -457,28 +436,20 @@
 <footer class="footer">
   <div class="container">
     <div class="content has-text-centered">
-      <a class="icon-link"
-         href="./static/videos/nerfies_paper.pdf">
-        <i class="fas fa-file-pdf"></i>
-      </a>
-      <a class="icon-link" href="https://github.com/keunhong" class="external-link" disabled>
+      <a class="icon-link" href="https://github.com/GohanUTS/SkyShade">
         <i class="fab fa-github"></i>
       </a>
     </div>
+
     <div class="columns is-centered">
       <div class="column is-8">
-        <div class="content">
+        <div class="content has-text-centered">
           <p>
-            This website is licensed under a <a rel="license"
-                                                href="http://creativecommons.org/licenses/by-sa/4.0/">Creative
-            Commons Attribution-ShareAlike 4.0 International License</a>.
+            SkyShade — AI for Robotics, UTS.
           </p>
           <p>
-            This means you are free to borrow the <a
-              href="https://github.com/nerfies/nerfies.github.io">source code</a> of this website,
-            we just ask that you link back to this page in the footer.
-            Please remember to remove the analytics code included in the header of the website which
-            you do not want on your website.
+            Website adapted from the
+            <a href="https://github.com/nerfies/nerfies.github.io">Nerfies website template</a>.
           </p>
         </div>
       </div>
