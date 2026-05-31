@@ -1624,15 +1624,17 @@ class TrainingGroundsHub:
         self._sub2_eval_stop   = threading.Event()
         self._sub2_eval_thread = None
         self._sub2_eval_active = False
-        self._sub2_eval_path   = []   # best episode path for 3D overlay
-        self._sub2_eval_result = ""   # summary text
+        self._sub2_eval_path   = []
+        self._sub2_eval_result = ""
+        self._sub2_efficiency  = ""   # "Model trained ✓  Hover efficiency ~73%" etc.
 
         self._nav_eval_queue   = queue.Queue()
         self._nav_eval_stop    = threading.Event()
         self._nav_eval_thread  = None
         self._nav_eval_active  = False
-        self._nav_eval_path    = []   # best episode path for 3D overlay
-        self._nav_eval_result  = ""   # summary text
+        self._nav_eval_path    = []
+        self._nav_eval_result  = ""
+        self._nav_efficiency   = ""   # "Model trained ✓  Navigation success ~61%"
 
         # ── Tkinter vars & widgets ────────────────────────────────────────────
         self._sub1_status_var = None
@@ -1741,9 +1743,9 @@ class TrainingGroundsHub:
     def _build_sub2_tab(self, frame, Figure, FigureCanvasTkAgg):
         # Left: 3D hover arena.  Right: PPO reward curve.
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
-        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG)
-        gs  = fig.add_gridspec(1, 2, width_ratios=[1.1, 1], wspace=0.05,
-                               left=0.02, right=0.98, top=0.92, bottom=0.08)
+        fig = Figure(figsize=(9, 4.4), dpi=90, facecolor=_MPL_FIG_BG)
+        gs  = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.06,
+                               left=0.02, right=0.98, top=0.93, bottom=0.07)
         ax_3d     = fig.add_subplot(gs[0], projection="3d")
         ax_reward = fig.add_subplot(gs[1])
         _mpl_dark_axes(ax_reward, "PPO Reward Curve", "Timestep", "Mean reward")
@@ -1767,7 +1769,7 @@ class TrainingGroundsHub:
 
         tk.Label(ctrl, text="Timesteps:", fg="#64748b", bg="#07111f", font=("Arial", 9)
                  ).grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self._sub2_steps_var = tk.StringVar(value="1500000")
+        self._sub2_steps_var = tk.StringVar(value="500000")
         self._sub2_entry = tk.Entry(ctrl, textvariable=self._sub2_steps_var,
                                     bg="#020617", fg="#f8fafc", insertbackground="#f8fafc",
                                     relief="flat", font=("Arial", 11, "bold"), width=10)
@@ -1796,9 +1798,9 @@ class TrainingGroundsHub:
     def _build_sub4_tab(self, frame, Figure, FigureCanvasTkAgg):
         # Left: 3D obstacle navigation room.  Right: PPO nav reward curve.
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG)
-        gs  = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.05,
-                               left=0.02, right=0.98, top=0.92, bottom=0.08)
+        fig = Figure(figsize=(9, 4.4), dpi=90, facecolor=_MPL_FIG_BG)
+        gs  = fig.add_gridspec(1, 2, width_ratios=[1.4, 1], wspace=0.06,
+                               left=0.02, right=0.98, top=0.93, bottom=0.07)
         ax_3d     = fig.add_subplot(gs[0], projection="3d")
         ax_reward = fig.add_subplot(gs[1])
         _mpl_dark_axes(ax_reward, "Nav PPO Reward Curve", "Timestep", "Mean reward")
@@ -1825,7 +1827,7 @@ class TrainingGroundsHub:
 
         tk.Label(nav_ctrl, text="Steps:", fg="#64748b", bg="#07111f", font=("Arial", 9)
                  ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self._nav_steps_var = tk.StringVar(value="500000")
+        self._nav_steps_var = tk.StringVar(value="150000")
         self._nav_entry = tk.Entry(nav_ctrl, textvariable=self._nav_steps_var,
                                    bg="#020617", fg="#f8fafc", insertbackground="#f8fafc",
                                    relief="flat", font=("Arial", 11, "bold"), width=9)
@@ -2099,12 +2101,16 @@ class TrainingGroundsHub:
         self._sub2_stop.clear()
         self._sub2_thread = _FlightTrainingWorker(total, self._sub2_queue, self._sub2_stop)
         self._sub2_thread.start()
-        self._sub2_training = True
+        self._sub2_training   = True
+        self._sub2_efficiency = ""
         self._sub2_entry.configure(state="disabled")
-        self._sub2_start_btn.configure(state="disabled")
+        self._sub2_start_btn.configure(state="normal" if False else "disabled")
         self._sub2_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                       activebackground="#b91c1c")
-        self._sub2_status_var.set("Training PPO…")
+        warm_note = "Fine-tuning existing model…" if os.path.exists(self._PPO_PATH) else "Training from scratch…"
+        self._sub2_status_var.set(
+            f"{warm_note}  ~{max(1, total_steps // 60000)} min on CPU  "
+            "(each run improves the previous model)")
 
     def _stop_sub2(self):
         if not self._sub2_training:
@@ -2246,9 +2252,12 @@ class TrainingGroundsHub:
         ax.text2D(0.02, 0.86, desc_txt, transform=ax.transAxes,
                   color="#94a3b8", fontsize=7, va="top")
 
-        if self._sub2_eval_result:
-            col = "#4ade80" if "PASS" in self._sub2_eval_result else "#f87171"
-            ax.text2D(0.5, 0.02, self._sub2_eval_result,
+        # Efficiency banner (bottom centre of 3D pane)
+        banner = self._sub2_efficiency or self._sub2_eval_result
+        if banner:
+            col = ("#4ade80" if ("✓" in banner or "PASS" in banner)
+                   else "#f97316" if "⏹" in banner else "#f87171")
+            ax.text2D(0.5, 0.02, banner,
                       transform=ax.transAxes, ha="center",
                       color=col, fontsize=7, fontweight="bold")
 
@@ -2434,11 +2443,13 @@ class TrainingGroundsHub:
                     [NAV_ALT] * len(ep), color="#4ade80", lw=2.2, alpha=0.95, zorder=11)
             ax.scatter([ep[-1][0]], [ep[-1][1]], [NAV_ALT],
                        color="#4ade80", s=80, marker="D", depthshade=False, zorder=12)
-        if self._nav_eval_result:
-            ax.text2D(0.5, 0.01, self._nav_eval_result,
+        nav_banner = self._nav_efficiency or self._nav_eval_result
+        if nav_banner:
+            col = ("#4ade80" if ("✓" in nav_banner or "PASS" in nav_banner)
+                   else "#f97316" if "⏹" in nav_banner else "#f87171")
+            ax.text2D(0.5, 0.01, nav_banner,
                       transform=ax.transAxes, ha="center",
-                      color="#4ade80" if "PASS" in self._nav_eval_result else "#f87171",
-                      fontsize=7, fontweight="bold")
+                      color=col, fontsize=7, fontweight="bold")
 
         ax.set_xlim(-hw, hw); ax.set_ylim(-hd, hd); ax.set_zlim(0, WALL_H)
         ax.set_xticks([]); ax.set_yticks([])
@@ -2517,12 +2528,16 @@ class TrainingGroundsHub:
         self._nav_stop.clear()
         self._nav_thread = NavTrainingWorker(total, self._nav_queue, self._nav_stop)
         self._nav_thread.start()
-        self._nav_training = True
+        self._nav_training   = True
+        self._nav_efficiency = ""
         self._nav_entry.configure(state="disabled")
         self._nav_start_btn.configure(state="disabled")
         self._nav_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                      activebackground="#b91c1c")
-        self._nav_status_var.set("Training obstacle navigation…")
+        warm_note = "Fine-tuning existing nav model…" if os.path.exists(self._NAV_PATH) else "Training from scratch…"
+        self._nav_status_var.set(
+            f"{warm_note}  ~{max(1, total // 10000)} min on CPU  "
+            "(each run improves the previous model)")
 
     def _stop_nav(self):
         if not self._nav_training:
@@ -2558,16 +2573,24 @@ class TrainingGroundsHub:
                 self._sub2_step = ts
                 changed2 = True
             elif k in ("done", "stopped"):
-                _, _path, steps = msg
+                # New format: (kind, path, steps, efficiency_pct, was_warm)
+                parts = msg[1:]
+                _path, steps = parts[0], parts[1]
+                eff  = parts[2] if len(parts) > 2 else 0
+                warm = parts[3] if len(parts) > 3 else False
                 self._sub2_training = False
                 self._sub2_ready = os.path.exists(self._PPO_PATH)
                 self._sub2_entry.configure(state="normal")
                 self._sub2_start_btn.configure(state="normal")
                 self._sub2_stop_btn.configure(state="disabled", bg="#334155",
                                                fg="#94a3b8", activebackground="#475569")
-                verb = "Done" if k == "done" else "Stopped"
-                self._sub2_status_var.set(
-                    f"{verb} — {steps:,} steps. {self._model_label(2)}")
+                warm_str = "fine-tuned from previous model" if warm else "trained from scratch"
+                eff_str  = (f"predicted hover efficiency  ~{eff}%"
+                            if k == "done" else "partial save")
+                self._sub2_efficiency = (
+                    f"✓ Model trained — {eff_str}  ({warm_str})" if k == "done"
+                    else f"⏹ Stopped at {steps:,} steps — {eff_str}")
+                self._sub2_status_var.set(self._sub2_efficiency)
                 changed2 = True
             elif k == "error":
                 self._sub2_training = False
@@ -2625,16 +2648,23 @@ class TrainingGroundsHub:
                 self._nav_viz  = viz
                 changed_nav = True
             elif k in ("done", "stopped"):
-                _, _path, steps = msg
+                parts = msg[1:]
+                _path, steps = parts[0], parts[1]
+                eff  = parts[2] if len(parts) > 2 else 0
+                warm = parts[3] if len(parts) > 3 else False
                 self._nav_training = False
                 self._nav_ready    = os.path.exists(self._NAV_PATH)
                 self._nav_entry.configure(state="normal")
                 self._nav_start_btn.configure(state="normal")
                 self._nav_stop_btn.configure(state="disabled", bg="#334155",
                                               fg="#94a3b8", activebackground="#475569")
-                verb = "Done" if k == "done" else "Stopped"
-                self._nav_status_var.set(f"{verb} — {steps:,} steps. "
-                    + ("● model saved" if self._nav_ready else "○ partial"))
+                warm_str = "fine-tuned from previous model" if warm else "trained from scratch"
+                eff_str  = (f"predicted navigation success  ~{eff}%"
+                            if k == "done" else "partial save")
+                self._nav_efficiency = (
+                    f"✓ Model trained — {eff_str}  ({warm_str})" if k == "done"
+                    else f"⏹ Stopped at {steps:,} steps — {eff_str}")
+                self._nav_status_var.set(self._nav_efficiency)
                 changed_nav = True
             elif k == "error":
                 self._nav_training = False
