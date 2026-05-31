@@ -1596,12 +1596,13 @@ class TrainingGroundsHub:
         self._sub2_stop     = threading.Event()
         self._sub2_thread   = None
         self._sub2_history  = []     # [(timestep, mean_reward, stage)]
-        self._sub2_step       = 0
-        self._sub2_total      = 1_500_000
-        self._sub2_training   = False
-        self._sub2_ready      = os.path.exists(self._PPO_PATH)
-        self._sub2_start_time = None
-        self._sub2_runs       = []   # list of completed run histories for multi-line chart
+        self._sub2_step           = 0
+        self._sub2_run_start_step = None   # cumulative step count at run start (for % calc)
+        self._sub2_total          = 1_500_000
+        self._sub2_training       = False
+        self._sub2_ready          = os.path.exists(self._PPO_PATH)
+        self._sub2_start_time     = None
+        self._sub2_runs           = []
 
         # ── Sub-4 MDP (battery safety, value iteration) ───────────────────────
         self._sub4_queue    = queue.Queue()
@@ -2411,8 +2412,9 @@ class TrainingGroundsHub:
             total = 1_500_000
         self._sub2_total = total
         self._sub2_history.clear()
-        self._sub2_step       = 0
-        self._sub2_start_time = time.time()
+        self._sub2_step           = 0
+        self._sub2_run_start_step = None   # set from first progress message this run
+        self._sub2_start_time     = time.time()
         self._sub2_stop.clear()
         self._sub2_thread = _FlightTrainingWorker(total, self._sub2_queue, self._sub2_stop)
         self._sub2_thread.start()
@@ -2650,7 +2652,9 @@ class TrainingGroundsHub:
                     eta_str   = (f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
                                  if eta_sec > 3600
                                  else f"{int(eta_sec//60)}m {int(eta_sec%60)}s")
-                    pct = 100 * self._sub2_step / self._sub2_total
+                    start = self._sub2_run_start_step or self._sub2_step
+                    steps_this_run = max(0, self._sub2_step - start)
+                    pct = min(100, 100 * steps_this_run / max(1, self._sub2_total))
                     ax_r.set_title(
                         f"Run {run_idx+1}  ·  {pct:.0f}%  ·  ~{eta_str} left  ·  {rate:.0f} steps/s",
                         color="#94a3b8", fontsize=11, pad=5)
@@ -2939,6 +2943,8 @@ class TrainingGroundsHub:
                 _, ts, stage, mr = msg
                 self._sub2_history.append((ts, mr, stage))
                 self._sub2_step = ts
+                if self._sub2_run_start_step is None:
+                    self._sub2_run_start_step = ts   # record starting offset
                 changed2 = True
             elif k in ("done", "stopped"):
                 # New format: (kind, path, steps, efficiency_pct, was_warm)
