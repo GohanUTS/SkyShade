@@ -1581,8 +1581,14 @@ class TrainingGroundsHub:
         self._sub3_thread   = None
         self._sub3_training = False
         self._sub3_ready    = os.path.exists(self._SVM_PATH)
-        self._sub3_accuracy = None      # float after training
-        self._sub3_cm       = None      # 2×2 confusion matrix after training
+        self._sub3_accuracy = None
+        self._sub3_cm       = None
+        # If model already exists, compute CM from training data so it shows immediately
+        if self._sub3_ready:
+            try:
+                self._sub3_accuracy, self._sub3_cm = self._eval_sub3_on_disk()
+            except Exception:
+                pass
         self._sub3_status_var = None
         self._sub3_fig = self._sub3_canvas = None
         self._sub3_ax_3d = self._sub3_ax_chart = None
@@ -2179,6 +2185,50 @@ class TrainingGroundsHub:
         self._sub3_train_btn.configure(state="disabled", text="Training…")
         self._sub3_status_var.set("Training SVM on weather sensor data…")
 
+    @staticmethod
+    def _eval_sub3_on_disk():
+        """Load the saved SVM and compute accuracy + CM on training CSV.
+
+        Called once at hub startup so the confusion matrix is always visible
+        even if training didn't happen in this session.
+        """
+        import csv as _csv
+        import pickle
+        from sklearn.metrics import confusion_matrix
+
+        _DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "data", "env_sensor_log.csv")
+        _MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "models", "svm_v1.pkl")
+        if not os.path.exists(_DATA) or not os.path.exists(_MODEL):
+            return None, None
+
+        with open(_MODEL, "rb") as f:
+            clf = pickle.load(f)
+
+        lux_l, rain_l, wind_l, y_l = [], [], [], []
+        with open(_DATA, newline="") as f:
+            for row in _csv.DictReader(f):
+                lux_l.append(float(row["lux"]))
+                rain_l.append(float(row["rain_raw"]))
+                wind_l.append(float(row["wind_speed"]))
+                y_l.append(int(row["label"]))
+
+        lux = np.array(lux_l); rain = np.array(rain_l)
+        wind = np.array(wind_l); y = np.array(y_l)
+        lux_d  = np.diff(lux,  prepend=lux[0])
+        rain_d = np.diff(rain, prepend=rain[0])
+        wind_d = np.diff(wind, prepend=wind[0])
+        prev1  = np.roll(y, 1); prev1[0]  = 0
+        prev2  = np.roll(y, 2); prev2[:2] = 0
+        prev3  = np.roll(y, 3); prev3[:3] = 0
+        X = np.column_stack([lux, rain, wind, lux_d, rain_d, wind_d, prev1, prev2, prev3])
+
+        preds = clf.predict(X)
+        cm    = confusion_matrix(y, preds)
+        acc   = float((preds == y).mean())
+        return acc, cm
+
     def _load_sub3_clf(self):
         """Lazy-load the SVM classifier for the live demo."""
         if self._sub3_clf is None and os.path.exists(self._SVM_PATH):
@@ -2241,38 +2291,45 @@ class TrainingGroundsHub:
         ax.cla()
         self._style_3d_ax(ax, "Live Weather Scene")
 
-        ROOM   = 4.0   # half-size of scene
-        ALT    = 2.5   # drone altitude
-        rain_n = int(rain * 50)   # number of rain particles
+        ROOM   = 4.0
+        ALT    = 2.5
+        rain_n = int(rain * 60)
+        th     = np.linspace(0, 2*_math.pi, 40)
 
-        # Ground grid
+        # Ground floor (visible grid)
         for x in np.linspace(-ROOM, ROOM, 7):
-            ax.plot([x, x], [-ROOM, ROOM], [0, 0], color="#1e293b", lw=0.5, alpha=0.5)
+            ax.plot([x, x], [-ROOM, ROOM], [0, 0], color="#334155", lw=0.8, alpha=0.7)
         for y in np.linspace(-ROOM, ROOM, 7):
-            ax.plot([-ROOM, ROOM], [y, y], [0, 0], color="#1e293b", lw=0.5, alpha=0.5)
+            ax.plot([-ROOM, ROOM], [y, y], [0, 0], color="#334155", lw=0.8, alpha=0.7)
+        ax.plot([-ROOM, ROOM, ROOM, -ROOM, -ROOM],
+                [-ROOM, -ROOM, ROOM, ROOM, -ROOM],
+                [0]*5, color="#475569", lw=1.5)
 
-        # Sky colour gradient (cloud layer gets darker with rain)
-        sky_darkness = rain * 0.8
-        sky_col = (max(0.05, 0.15 - sky_darkness*0.12),
-                   max(0.05, 0.20 - sky_darkness*0.16),
-                   max(0.05, 0.35 - sky_darkness*0.30))
+        # Cloud — filled disc at ceiling with colour based on rain intensity
+        cloud_r   = 1.8 + rain * 2.2
+        cloud_col = (max(0.25, 0.55 - rain*0.40),
+                     max(0.25, 0.55 - rain*0.40),
+                     max(0.25, 0.60 - rain*0.35))
+        # Filled ellipse approximated with many thin slices
+        for frac in np.linspace(0.3, 1.0, 6):
+            ax.plot(cloud_r*frac*np.cos(th)*1.6, cloud_r*frac*np.sin(th),
+                    np.full(40, ROOM + 0.1),
+                    color=cloud_col, lw=1.5, alpha=0.25)
+        ax.plot(cloud_r*np.cos(th)*1.6, cloud_r*np.sin(th),
+                np.full(40, ROOM + 0.1),
+                color=cloud_col, lw=3.0, alpha=0.9)
 
-        # Cloud blob (ellipse at top of scene)
-        cloud_r = 1.5 + rain * 2.5
-        th = np.linspace(0, 2*_math.pi, 40)
-        ax.plot(cloud_r*np.cos(th)*1.6, cloud_r*np.sin(th), np.full(40, ROOM+0.2),
-                color=tuple(sky_col), lw=2.5, alpha=0.85)
-
-        # Rain particles (vertical line segments falling from cloud to ground)
+        # Rain particles — thicker, brighter, more visible
         if rain_n > 0:
-            rng_r = np.random.default_rng(int(t * 8) % 9999)
-            rx = rng_r.uniform(-ROOM*0.9, ROOM*0.9, rain_n)
-            ry = rng_r.uniform(-ROOM*0.9, ROOM*0.9, rain_n)
-            rz_top = rng_r.uniform(0.5, ROOM + 0.1, rain_n)
-            rz_bot = np.clip(rz_top - 0.6, 0, ROOM)
+            rng_r  = np.random.default_rng(int(t * 8) % 9999)
+            rx     = rng_r.uniform(-ROOM*0.85, ROOM*0.85, rain_n)
+            ry     = rng_r.uniform(-ROOM*0.85, ROOM*0.85, rain_n)
+            rz_top = rng_r.uniform(ALT + 0.5, ROOM, rain_n)
+            rz_bot = np.clip(rz_top - 0.9, 0, ROOM)
+            alpha  = min(0.95, 0.4 + rain * 0.6)
             for i in range(rain_n):
                 ax.plot([rx[i], rx[i]], [ry[i], ry[i]], [rz_top[i], rz_bot[i]],
-                        color="#93c5fd", lw=0.8, alpha=min(0.9, rain * 1.2))
+                        color="#bfdbfe", lw=1.4, alpha=alpha)
 
         # Wind arrows at drone altitude (pointing right, varying strength)
         n_wind = int(wind / 2) + 1
@@ -2414,10 +2471,17 @@ class TrainingGroundsHub:
             ax_c.text(0.5, -0.03, acc_txt, transform=ax_c.transAxes,
                       ha="center", color=acc_col, fontsize=12, fontweight="bold")
         else:
-            ax_c.text(0.5, 0.20,
-                      "Click  '🔄 Train / Retrain SVM'\nto train the model and\nsee results here.",
-                      transform=ax_c.transAxes, ha="center", va="center",
-                      color="#64748b", fontsize=13)
+            if self._sub3_ready:
+                # Model exists but CM not yet computed — try loading now
+                try:
+                    self._sub3_accuracy, self._sub3_cm = self._eval_sub3_on_disk()
+                except Exception:
+                    pass
+            if self._sub3_cm is None:
+                ax_c.text(0.5, 0.20,
+                          "Click  '🔄 Train / Retrain SVM'\nto train the model\nand see accuracy results here.",
+                          transform=ax_c.transAxes, ha="center", va="center",
+                          color="#64748b", fontsize=13)
 
         self._sub3_canvas.draw_idle()
 
