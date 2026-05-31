@@ -1,0 +1,283 @@
+# Training Grounds Hub
+
+The Training Grounds hub is a dedicated window for training, visualising, and evaluating each subsystem's AI model before launching the main simulation. It opens from the SkyShade Launcher when you click any training card button.
+
+---
+
+## Opening the hub
+
+```
+python run_sim.py
+```
+
+In the left panel of the launcher, click any of the three training card buttons:
+
+| Button | Colour | Opens hub on tab |
+|---|---|---|
+| **Calibrate** | Green | Sub-1 Perception |
+| **Train PPO** | Blue | Sub-2 Flight PPO |
+| **Solve MDP** | Purple | Sub-4 Nav Safety |
+
+The hub window is titled **SkyShade — Training Grounds** and has three tabs along the top.
+
+---
+
+## Layout overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  SkyShade — Training Grounds   Train each subsystem before launch.  │
+├────────────────────┬──────────────────────┬─────────────────────────┤
+│  Sub-1 Perception  │  Sub-2  Flight PPO   │  Sub-4  Nav Safety      │
+└────────────────────┴──────────────────────┴─────────────────────────┘
+│                                                                      │
+│   LEFT PANEL (60%)                RIGHT PANEL (40%)                  │
+│   ─────────────                   ────────────────                   │
+│   3D animated scene               Reward curve / chart               │
+│   (auto-rotates)                  (updates live during training)     │
+│                                                                      │
+│   [ Controls / buttons / status bar ]                                │
+│                                                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  Sub-1 Perception ●   Sub-2 Flight PPO ○   Sub-4 Battery MDP ●     │
+│  Sub-4 Nav PPO ●   Launch the main sim from the SkyShade Launcher.  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+The footer shows a `●` (trained/ready) or `○` (not yet trained) badge for each model. The sim can be launched from the launcher window once all required models are ready.
+
+---
+
+## Sub-1 Perception tab
+
+### Purpose
+
+Sub-1 uses a deterministic HSV colour tracker — no neural network. This tab lets you verify the tracker works correctly against a synthetic 3D scene before running the full simulation.
+
+### Left panel — Live Camera View
+
+A PyBullet room renders in real time. A **red sphere** moves along a Lissajous path (a smooth 3D figure-eight curve). The camera gently pans to simulate a drone gimbal tracking the sphere.
+
+| Overlay | What it means |
+|---|---|
+| **Green bounding box** | Where the HSV tracker detected the sphere in this frame |
+| **White crosshair (+)** | Centre of the detected region |
+| **Yellow dot** | Where the sphere actually is (projected from its 3D world position using camera matrices) |
+| **Blue ring** | Acceptance zone — 18 px radius. The crosshair must land inside this ring for the frame to count as a pass |
+| **"err Xpx" label** | Pixel error — distance in pixels between the crosshair and the yellow dot |
+| Box colour **green** | Detection found AND within the acceptance zone (LOCKED) |
+| Box colour **orange** | Detection found but outside the acceptance zone (off target) |
+
+### Right panel — Tracking Accuracy chart
+
+- **Blue line** — confidence score [0–1] over the last 200 frames (left axis)
+- **Blue dashed** — confidence threshold (0.7); frames above this count as locked
+- **Orange line** — pixel error in pixels (right axis)
+- **Orange dashed** — 18 px pass threshold
+- **Green shaded region** — frames where confidence is above threshold
+
+### Status bar
+
+```
+LOCKED ✓   confidence 1.00   pixel error 0.0px
+SEARCHING   confidence 0.23   no detection
+FOUND – off target   confidence 0.81   pixel error 31px
+```
+
+### Controls
+
+| Button | Action |
+|---|---|
+| **Start Live View** | Initialises the PyBullet room and begins streaming frames |
+| **Stop Live View** | Pauses the calibration check and closes the PyBullet session |
+
+Sub-1 is always shown as ready (●) in the footer — no model file is required.
+
+---
+
+## Sub-2 Flight PPO tab
+
+### Purpose
+
+Train and evaluate the PPO agent that keeps the drone hovering above the user. The 3D hover arena visualises what the drone is learning at each stage of the curriculum.
+
+### Left panel — 3D Hover Arena
+
+The scene auto-rotates slowly (0.35°/tick) so you can see it from all angles without clicking.
+
+| Element | What it represents |
+|---|---|
+| **Grey floor with grid** | Room floor (7 × 7 m arena) |
+| **Semi-transparent walls** | Four room walls — you're looking inside a training space |
+| **Green dashed circle on floor** | Landing pad — directly below the hover target |
+| **Green ring at 2.5 m altitude** | The hover zone — drone must stay inside this at `TARGET_ALTITUDE` |
+| **Quadcopter drone (X-frame + rotors)** | The agent being trained. In Stage 1 it barely drifts; in Stage 2 it sways to show wind resistance; in Stage 3 it tracks a moving person |
+| **Orange arrows** (stage 2+) | Gusts — 6 arrows in Stage 2, 10 in Stage 3, rotating inward to show force direction |
+| **Purple figure on floor** (stage 3) | Walking user — orbits the arena. The drone must follow them |
+| **Dashed line drone → target** | Shows the current gap the drone is trying to close |
+| **Green trail** (after Evaluate) | Best evaluation episode — the actual path the trained drone flew |
+
+#### Stage indicator (top-left of 3D pane)
+
+```
+Stage 1 / 3  —  Calm air
+Drone learns to fly up and
+hold position above the target.
+No wind, stationary user.
+```
+
+Stages advance automatically based on timestep count:
+
+| Stage | Timesteps | Conditions |
+|---|---|---|
+| 1 | 0 – 200 k | No wind, stationary user — learn basic hover |
+| 2 | 200 k – 400 k | Random gusts 0–4.5 m/s — learn to resist wind |
+| 3 | 400 k + | Gusty wind + walking user — learn to track |
+
+### Right panel — PPO Reward Curve
+
+- Coloured line segments: **blue** = stage 1, **pink** = stage 2, **purple** = stage 3
+- Coloured background bands show which stage each region belongs to
+- **White moving-average line** — smoothed trend; easier to see if learning is progressing
+- **`↑ improving` / `→ flat`** — bottom-right indicator showing whether the last 20 rollouts improved
+
+#### Title bar shows live training stats:
+```
+PPO Reward  ·  38% done  ·  ~14m left  ·  1024 steps/s
+```
+
+### Controls
+
+| Control | Description |
+|---|---|
+| **Timesteps** entry | How many steps to train (default 500 000 ≈ 8 min first run) |
+| **Start Training** | Begins PPO training in a background thread |
+| **Stop** | Signals the worker to stop; saves the partial model |
+| **Evaluate Model** | Runs 5 test episodes and draws the best path in the arena |
+
+### Status bar messages
+
+| Message | Meaning |
+|---|---|
+| `Fine-tuning existing model… ~8 min on CPU` | A saved model was found; this run improves it |
+| `Training from scratch… ~8 min on CPU` | No model yet; this is the first run |
+| `Training PPO Stage 2 — Step 245k/500k` | Live progress during training |
+| `✓ Model trained — predicted hover efficiency ~73%  (fine-tuned from previous model)` | Training completed |
+| `⏹ Stopped at 180k steps — partial save` | User pressed Stop; model saved at that point |
+
+### Why training takes time
+
+PyBullet physics runs at approximately 1 000 steps/second on a CPU (no GPU needed). At the default of 500 k steps this is ~8 minutes. Each step involves:
+- 8 physics substeps in PyBullet
+- A neural network forward pass (small MLP: 256 × 256)
+- A reward computation
+
+**The more you train, the better it gets.** The warm-start means every "Start Training" click loads the existing model and adds improvement on top — you never lose prior learning. Run 3 × 8 min sessions to get a well-generalised policy.
+
+### Evaluate Model
+
+Click **Evaluate Model** to run 5 deterministic test episodes on stage-2 (gusty wind) conditions:
+
+- Each episode: drone spawned at a random offset, must fly in and hover
+- Per-episode status: `Eval ep 3/5 ✓  reward +184  hover 67%`
+- Best episode path drawn as a **bright green trail** in the 3D arena
+- Final verdict: `PASS ✓ 4/5 episodes hovered` (pass = ≥3/5 episodes spent ≥30% of time in the hover zone)
+- Button relabels to show score: `Evaluate Model  (4/5 ✓)`
+
+---
+
+## Sub-4 Nav Safety tab
+
+This tab controls two independent Sub-4 policies.
+
+### Left panel — 3D Obstacle Navigation Room
+
+A 10 × 8 × 3.5 m room with 7 cylindrical pillars. The auto-rotating scene shows:
+
+| Element | What it represents |
+|---|---|
+| **Grey wireframe** | Room outline — floor, 4 walls, ceiling frame |
+| **Red cylinders** | 7 obstacle pillars (bottom + top circle + vertical lines) |
+| **Green star + ring** (east end) | Goal zone — drone must reach this to complete the episode |
+| **Blue arrow** (west end) | Start position |
+| **Blue sphere** | Drone (live position during training) |
+| **8 orange lines** from drone | Lidar rays — each points in a 45° increment. The ray shortens when it hits a pillar, showing the drone actively sensing nearby obstacles |
+| **Blue trail** | Recent drone positions — shows the path taken |
+| **Green trail** (after Evaluate) | Best evaluation episode path through the obstacle course |
+
+#### Bottom text
+
+```
+✓ Model trained — predicted navigation success ~61%  (fine-tuned from previous model)
+```
+
+### Right panel — Nav PPO Reward Curve
+
+- **Teal line** — mean episode reward per rollout
+- Reward starts low (drone crashing/getting stuck) and trends upward as the policy learns to avoid obstacles
+- At convergence, episodes with goal arrival give a +200 completion bonus, pushing reward above +100
+
+### Controls — Navigation training (teal row)
+
+| Control | Description |
+|---|---|
+| **Steps** entry | Default 150 000 ≈ 3 min first run |
+| **Train Navigation** | Starts PPO obstacle-avoidance training |
+| **Stop** | Stops training and saves the partial model |
+| **Evaluate Model** | Runs 5 test episodes; draws best path in green |
+
+### Controls — Battery Safety MDP (purple row, compact)
+
+| Control | Description |
+|---|---|
+| **Solve Battery-Safety MDP** | Runs value iteration (~18 iterations, < 1 second) |
+| **Stop** | Cancels mid-solve (rarely needed given the speed) |
+
+The convergence curve was shown in an earlier version and is saved to `convergence_curve.png`. The policy heatmap result is:
+
+| Battery | NEAR | MID | FAR |
+|---|---|---|---|
+| HIGH | RTH | RTH | RTH |
+| MEDIUM | RTH | RTH | RTH |
+| LOW | RTH | RTH | RTH |
+| CRITICAL | LAND | LAND | LAND |
+
+### Evaluate Model (nav)
+
+Runs 5 deterministic episodes through the obstacle room:
+- Per-episode: `✓ GOAL` or `✗ miss`, reward, steps taken
+- Best path drawn as **green trail** between red pillars
+- Verdict: `PASS ✓ 3/5 episodes reached goal`
+
+---
+
+## Footer — Training status
+
+```
+Sub-1 Perception ●   Sub-2 Flight PPO ○   Sub-4 Battery MDP ●   Sub-4 Nav PPO ●
+```
+
+- `●` = model file exists on disk (trained/ready)
+- `○` = model file missing (needs training)
+- The main sim launcher checks these before allowing launch
+
+---
+
+## Warm-starting explained
+
+Every "Start Training" click checks for an existing `.zip` model:
+
+| Scenario | Behaviour | Learning rate |
+|---|---|---|
+| **No model exists** | Creates a fresh network, trains from scratch | `3e-4` |
+| **Model exists** | Loads weights, continues training | `1e-4` (hover) / `5e-5` (nav) |
+
+`reset_num_timesteps=False` is passed on warm runs so the curriculum stage counter continues — a 200k warm-start picks up mid-stage-2 if the previous run ended there.
+
+**You never lose prior learning.** Each training session builds on the last.
+
+---
+
+## Closing the hub
+
+Click the window's ✕ button. All background training threads are stopped and any partially trained models are saved before the window closes.

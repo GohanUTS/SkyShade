@@ -12,15 +12,17 @@ Welcome to the SkyShade project wiki. SkyShade is a fully simulated autonomous d
 | Page | Description |
 |---|---|
 | [Project Overview](Project-Overview) | Goals, scope, and system summary |
-| [Architecture](Architecture) | How the four subsystems connect over ROS 2 |
-| [Sub-1: Perception](Sub-1-Perception) | HSV tracking, distance estimation, EMA smoothing |
-| [Sub-2: Flight Control](Sub-2-Flight-Control) | PPO hover agent + PID fallback (Q-learning archived) |
+| [Architecture](Architecture) | How the four subsystems connect, file layout, control flow |
+| [Using the GUI](Using-the-GUI) | **How to use the Launcher, Training Grounds hub, and Simulation dashboard** |
+| [Training Grounds](Training-Grounds) | **Full guide to every tab, chart, button, and visual overlay in the hub** |
+| [Training the Models](Training-the-Models) | CLI commands and hyperparameter reference for re-training |
+| [Running the Simulation](Running-the-Simulation) | Prerequisites, launch options, troubleshooting |
+| [Sub-1: Perception](Sub-1-Perception) | HSV tracking, distance estimation, EMA, calibration room |
+| [Sub-2: Flight Control](Sub-2-Flight-Control) | PPO hover agent, training curriculum, PID fallback |
 | [Sub-3: Environmental Decision](Sub-3-Environmental-Decision) | SVM umbrella classifier |
-| [Sub-4: Navigation and Safety](Sub-4-Navigation-Safety) | MDP battery-safety policy + PPO obstacle navigation |
-| [Running the Simulation](Running-the-Simulation) | How to run the full integrated sim |
-| [Training the Models](Training-the-Models) | Re-training each subsystem model |
-| [Validation and Results](Validation-and-Results) | Metrics, targets, and test outcomes |
-| [Known Issues and Decisions](Known-Issues-and-Decisions) | Design decisions, bugs fixed, and current limitations |
+| [Sub-4: Navigation and Safety](Sub-4-Navigation-Safety) | MDP battery-safety + PPO obstacle navigation |
+| [Validation and Results](Validation-and-Results) | Metrics, targets, evaluation workflow |
+| [Known Issues and Decisions](Known-Issues-and-Decisions) | Design decisions, bugs fixed, future work |
 
 ---
 
@@ -38,14 +40,14 @@ cd ros2_ws && colcon build && source install/setup.bash && cd ..
 python run_sim.py
 ```
 
-## Training before first launch
+## Before first launch — train the models
 
-The launcher blocks the sim if trained models are missing. Open it and click:
+The launcher blocks the sim if trained models are missing:
 
-| Card | Button | What it opens |
+| Card | Button | Time |
 |---|---|---|
-| Sub-1 Perception | Calibrate | Live PyBullet calibration room (no training needed) |
-| Sub-2 Flight | Train PPO | PPO hover training — 3D room with drone + wind, ~30 min |
-| Sub-4 Nav Safety | Solve MDP | Battery MDP solver (< 1 sec) + PPO obstacle nav trainer |
+| Sub-1 Perception | Calibrate | Instant — no training needed |
+| Sub-2 Flight | Train PPO | ~8 min first run; fine-tuned on repeat |
+| Sub-4 Nav Safety | Solve MDP | < 1 sec (battery MDP) + ~3 min (nav PPO) |
 
-Click **Evaluate Model** in the Sub-2 and Sub-4 tabs to validate each model before launching the full simulation.
+See [Training Grounds](Training-Grounds) for a full guide to every control and visual in the hub, and [Using the GUI](Using-the-GUI) for step-by-step instructions.
