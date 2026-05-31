@@ -3044,16 +3044,43 @@ class TrainingGroundsHub:
         # ── Nav reward curve (right) ──────────────────────────────────────────
         ax_r = self._sub4_ax_reward
         ax_r.cla()
-        _mpl_dark_axes(ax_r, "Nav PPO Reward Curve", "Timestep", "Mean reward")
+        _mpl_dark_axes(ax_r, "Nav SAC Reward Curve", "Timestep", "Mean reward")
         if self._nav_history:
             xs = [p[0] for p in self._nav_history]
             ys = [p[1] for p in self._nav_history]
-            ax_r.plot(xs, ys, color="#14b8a6", lw=1.8)
+
+            # "Goal reached" threshold line — reward > 0 means goal bonus kicking in
+            ax_r.axhline(0, color="#22c55e", ls="--", lw=1.2, alpha=0.6,
+                         label="Goal reached zone (reward > 0)")
+            ax_r.axhline(-150, color="#dc2626", ls="--", lw=0.8, alpha=0.4,
+                         label="Stuck / crashing zone")
+
+            ax_r.plot(xs, ys, color="#14b8a6", lw=2.0)
             ax_r.set_xlim(0, max(self._nav_total, xs[-1]))
+
+            # Trend label
+            if len(ys) >= 5:
+                latest = ys[-1]
+                if latest > 50:
+                    lbl, col = "✓ Goal being reached consistently!", "#4ade80"
+                elif latest > 0:
+                    lbl, col = "↑ Approaching goal zone — keep going", "#86efac"
+                elif ys[-1] > ys[max(0, len(ys)-10)]:
+                    lbl, col = "↑ Learning — reward rising", "#fde68a"
+                else:
+                    lbl, col = "Still exploring — reward will rise", "#94a3b8"
+                ax_r.text(0.98, 0.05, lbl, transform=ax_r.transAxes,
+                          ha="right", color=col, fontsize=11, fontweight="bold")
+
+            ax_r.legend(facecolor="#0f172a", edgecolor=_MPL_EDGE,
+                        labelcolor="#94a3b8", fontsize=9, loc="upper left")
         else:
-            ax_r.text(0.5, 0.5, "Reward curve appears here\nduring training",
+            ax_r.text(0.5, 0.5,
+                      "SAC reward curve appears here during training.\n\n"
+                      "Reward > 0  →  drone is reaching the goal\n"
+                      "Reward < 0  →  still learning to navigate",
                       ha="center", va="center", color="#475569",
-                      transform=ax_r.transAxes, fontsize=9)
+                      transform=ax_r.transAxes, fontsize=10)
 
         self._sub4_canvas.draw_idle()
 
@@ -3135,8 +3162,8 @@ class TrainingGroundsHub:
                                      activebackground="#b91c1c")
         warm_note = "SAC fine-tuning from existing model…" if os.path.exists(self._NAV_PATH) else "SAC training from scratch…"
         self._nav_status_var.set(
-            f"{warm_note}  ~{max(1, total // 10000)} min on CPU  "
-            "· off-policy replay buffer · auto-entropy exploration")
+            f"{warm_note}  ~{max(1, total // 50000)} min on CPU  "
+            "· SAC off-policy (replay buffer) · auto-entropy exploration")
 
     def _stop_nav(self):
         if not self._nav_training:
