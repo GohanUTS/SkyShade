@@ -100,9 +100,10 @@ TRAINING_DISPLAY_SIZE = (360, 270)
 LAUNCHER_TRAINING_DISPLAY_SIZE = (480, 360)
 # TRAINING_PIXEL_PASS imported from sub1_perception.training
 TRAINING_GROUND_ITEMS = (
-    ("camera", "Sub-1 Perception",  "HSV tracker", "3D calibration room — live red-marker lock check.", "#22c55e"),
-    ("flight", "Sub-2 Flight",      "PPO",          "3D hover arena — PPO wind-gust curriculum training.", "#60a5fa"),
-    ("safety", "Sub-4 Nav Safety",  "MDP + PPO",    "3D obstacle room — lidar navigation + battery safety.", "#f59e0b"),
+    ("camera",   "Sub-1 Perception", "HSV tracker", "3D calibration room — live red-marker lock check.", "#22c55e"),
+    ("flight",   "Sub-2 Flight",     "PPO",          "3D hover arena — PPO wind-gust curriculum training.", "#60a5fa"),
+    ("weather",  "Sub-3 Weather",    "SVM",          "3D weather scene — umbrella deploy/stow SVM decision.", "#f472b6"),
+    ("safety",   "Sub-4 Nav Safety", "MDP + PPO",    "3D obstacle room — lidar navigation + battery safety.", "#f59e0b"),
 )
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
@@ -1540,6 +1541,9 @@ class TrainingGroundsHub:
     _PPO_PATH = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "models", "ppo_flight_v1.zip"
     )
+    _SVM_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "models", "svm_v1.pkl"
+    )
     _MDP_PATH = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "models", "policy_table_v1.npy"
     )
@@ -1570,6 +1574,22 @@ class TrainingGroundsHub:
         self._sub1_start_t   = 0.0
         self._sub1_ready     = True   # tracker always available
         self._sub1_img_ref   = None   # matplotlib imshow AxesImage (reused)
+
+        # ── Sub-3 (SVM umbrella classifier) ──────────────────────────────────
+        self._sub3_queue    = queue.Queue()
+        self._sub3_stop     = threading.Event()
+        self._sub3_thread   = None
+        self._sub3_training = False
+        self._sub3_ready    = os.path.exists(self._SVM_PATH)
+        self._sub3_accuracy = None      # float after training
+        self._sub3_cm       = None      # 2×2 confusion matrix after training
+        self._sub3_status_var = None
+        self._sub3_fig = self._sub3_canvas = None
+        self._sub3_ax_3d = self._sub3_ax_chart = None
+        self._sub3_train_btn = None
+        # Shared classifier for live demo (loaded lazily)
+        self._sub3_clf      = None
+        self._sub3_umbrella = "STOW"    # current SVM prediction
 
         # ── Sub-2 (PPO flight training) ───────────────────────────────────────
         self._sub2_queue    = queue.Queue()
@@ -1681,13 +1701,16 @@ class TrainingGroundsHub:
 
         tab1 = tk.Frame(self._nb, bg="#07111f")
         tab2 = tk.Frame(self._nb, bg="#07111f")
+        tab3 = tk.Frame(self._nb, bg="#07111f")
         tab4 = tk.Frame(self._nb, bg="#07111f")
         self._nb.add(tab1, text="  Sub-1  Perception  ")
         self._nb.add(tab2, text="  Sub-2  Flight PPO  ")
+        self._nb.add(tab3, text="  Sub-3  Weather SVM  ")
         self._nb.add(tab4, text="  Sub-4  Nav Safety  ")
 
         self._build_sub1_tab(tab1, Figure, FigureCanvasTkAgg)
         self._build_sub2_tab(tab2, Figure, FigureCanvasTkAgg)
+        self._build_sub3_tab(tab3, Figure, FigureCanvasTkAgg)
         self._build_sub4_tab(tab4, Figure, FigureCanvasTkAgg)
 
         # Footer — training status only, no sim launch
@@ -1794,6 +1817,43 @@ class TrainingGroundsHub:
                                         font=("Arial", 10, "bold"), padx=12, pady=6)
         self._sub2_eval_btn.grid(row=2, column=0, columnspan=4, sticky="ew",
                                   pady=(8, 0))
+
+    def _build_sub3_tab(self, frame, Figure, FigureCanvasTkAgg):
+        # Left: 3D animated weather scene (drone + umbrella + rain + wind).
+        # Right: Weather gauges + SVM decision + confusion matrix.
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        fig = Figure(figsize=(9, 4.4), dpi=90, facecolor=_MPL_FIG_BG)
+        gs  = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.06,
+                               left=0.02, right=0.98, top=0.93, bottom=0.07)
+        ax_3d    = fig.add_subplot(gs[0], projection="3d")
+        ax_chart = fig.add_subplot(gs[1])
+        self._style_3d_ax(ax_3d, "Weather Scene")
+        _mpl_dark_axes(ax_chart, "SVM Decision", "", "")
+        self._sub3_fig     = fig
+        self._sub3_ax_3d   = ax_3d
+        self._sub3_ax_chart = ax_chart
+
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(10, 2))
+        self._sub3_canvas = canvas
+
+        ctrl = tk.Frame(frame, bg="#07111f", padx=14, pady=6)
+        ctrl.pack(fill="x")
+        ctrl.grid_columnconfigure(0, weight=1)
+
+        self._sub3_status_var = tk.StringVar(
+            value=("● READY — svm_v1.pkl found" if self._sub3_ready
+                   else "○ NOT TRAINED — click Train SVM (takes < 2 seconds)"))
+        tk.Label(ctrl, textvariable=self._sub3_status_var,
+                 fg="#94a3b8", bg="#07111f", font=("Arial", 10, "bold"), anchor="w"
+                 ).grid(row=0, column=0, sticky="w")
+
+        self._sub3_train_btn = tk.Button(
+            ctrl, text="Train SVM",
+            command=self._start_sub3,
+            bg="#831843", fg="#fce7f3", relief="flat",
+            font=("Arial", 10, "bold"), padx=12, pady=6)
+        self._sub3_train_btn.grid(row=0, column=1, sticky="e")
 
     def _build_sub4_tab(self, frame, Figure, FigureCanvasTkAgg):
         # Left: 3D obstacle navigation room.  Right: PPO nav reward curve.
@@ -1907,11 +1967,12 @@ class TrainingGroundsHub:
 
     def _gate_text(self) -> str:
         s1 = "●"
-        s2 = "●" if self._sub2_ready else "○"
-        s4 = "●" if self._sub4_ready else "○"
+        s2 = "●" if self._sub2_ready  else "○"
+        s3 = "●" if self._sub3_ready  else "○"
+        s4 = "●" if self._sub4_ready  else "○"
         sn = "●" if self._nav_ready   else "○"
-        return (f"Sub-1 Perception {s1}   Sub-2 Flight PPO {s2}"
-                f"   Sub-4 Battery MDP {s4}   Sub-4 Nav PPO {sn}")
+        return (f"Sub-1 {s1}   Sub-2 PPO {s2}   Sub-3 SVM {s3}"
+                f"   Sub-4 MDP {s4}   Sub-4 Nav {sn}")
 
     def select_tab(self, idx: int):
         """Select a tab by 0-based index (0=Sub-1, 1=Sub-2, 2=Sub-4)."""
@@ -2086,6 +2147,225 @@ class TrainingGroundsHub:
         pass  # all updates handled inline in _sub1_step()
 
     # ── Sub-2 controls & plot ─────────────────────────────────────────────────
+
+    # ── Sub-3 SVM controls & plot ─────────────────────────────────────────────
+
+    def _start_sub3(self):
+        if self._sub3_training:
+            return
+        from sub3_env.training_worker import SVMTrainingWorker
+        self._sub3_stop.clear()
+        self._sub3_thread = SVMTrainingWorker(self._sub3_queue, self._sub3_stop)
+        self._sub3_thread.start()
+        self._sub3_training = True
+        self._sub3_train_btn.configure(state="disabled", text="Training…")
+        self._sub3_status_var.set("Training SVM on weather sensor data…")
+
+    def _load_sub3_clf(self):
+        """Lazy-load the SVM classifier for the live demo."""
+        if self._sub3_clf is None and os.path.exists(self._SVM_PATH):
+            try:
+                import pickle
+                from sub3_env.feature_engineering import FeatureBuilder
+                with open(self._SVM_PATH, "rb") as f:
+                    self._sub3_clf = pickle.load(f)
+                self._sub3_fb = FeatureBuilder()
+            except Exception:
+                self._sub3_clf = None
+
+    def _update_sub3_plot(self):
+        import math as _math
+        t = time.time()
+
+        # ── Animated weather cycle: clear → cloudy → rainy → storm → clear ──
+        period = 30.0    # seconds per full cycle
+        phase  = (t % period) / period   # 0-1
+
+        if phase < 0.25:       # clear
+            lux   = 85000 - phase * 4 * 40000
+            rain  = 0.01 + phase * 4 * 0.05
+            wind  = 1.0  + phase * 4 * 1.0
+        elif phase < 0.50:     # cloudy
+            p2    = (phase - 0.25) * 4
+            lux   = 45000 - p2 * 25000
+            rain  = 0.06  + p2 * 0.30
+            wind  = 2.0   + p2 * 2.0
+        elif phase < 0.75:     # rainy
+            p3    = (phase - 0.50) * 4
+            lux   = 20000 - p3 * 12000
+            rain  = 0.36  + p3 * 0.50
+            wind  = 4.0   + p3 * 3.0
+        else:                  # clearing
+            p4    = (phase - 0.75) * 4
+            lux   = 8000  + p4 * 77000
+            rain  = 0.86  - p4 * 0.85
+            wind  = 7.0   - p4 * 6.0
+
+        lux  = float(np.clip(lux,  1000, 100000))
+        rain = float(np.clip(rain, 0.0,  1.0))
+        wind = float(np.clip(wind, 0.0,  10.0))
+
+        # Run SVM prediction if model loaded
+        self._load_sub3_clf()
+        if self._sub3_clf is not None:
+            try:
+                feat = self._sub3_fb.build(lux, rain, wind)
+                pred = int(self._sub3_clf.predict(feat.reshape(1, -1))[0])
+                self._sub3_umbrella = "DEPLOY" if pred else "STOW"
+                self._sub3_fb.push_action(pred)
+            except Exception:
+                pass
+
+        umbrella_open = self._sub3_umbrella == "DEPLOY"
+
+        # ── 3D Weather Scene ─────────────────────────────────────────────────
+        ax = self._sub3_ax_3d
+        ax.cla()
+        self._style_3d_ax(ax, "Live Weather Scene")
+
+        ROOM   = 4.0   # half-size of scene
+        ALT    = 2.5   # drone altitude
+        rain_n = int(rain * 50)   # number of rain particles
+
+        # Ground grid
+        for x in np.linspace(-ROOM, ROOM, 7):
+            ax.plot([x, x], [-ROOM, ROOM], [0, 0], color="#1e293b", lw=0.5, alpha=0.5)
+        for y in np.linspace(-ROOM, ROOM, 7):
+            ax.plot([-ROOM, ROOM], [y, y], [0, 0], color="#1e293b", lw=0.5, alpha=0.5)
+
+        # Sky colour gradient (cloud layer gets darker with rain)
+        sky_darkness = rain * 0.8
+        sky_col = (max(0.05, 0.15 - sky_darkness*0.12),
+                   max(0.05, 0.20 - sky_darkness*0.16),
+                   max(0.05, 0.35 - sky_darkness*0.30))
+
+        # Cloud blob (ellipse at top of scene)
+        cloud_r = 1.5 + rain * 2.5
+        th = np.linspace(0, 2*_math.pi, 40)
+        ax.plot(cloud_r*np.cos(th)*1.6, cloud_r*np.sin(th), np.full(40, ROOM+0.2),
+                color=tuple(sky_col), lw=2.5, alpha=0.85)
+
+        # Rain particles (vertical line segments falling from cloud to ground)
+        if rain_n > 0:
+            rng_r = np.random.default_rng(int(t * 8) % 9999)
+            rx = rng_r.uniform(-ROOM*0.9, ROOM*0.9, rain_n)
+            ry = rng_r.uniform(-ROOM*0.9, ROOM*0.9, rain_n)
+            rz_top = rng_r.uniform(0.5, ROOM + 0.1, rain_n)
+            rz_bot = np.clip(rz_top - 0.6, 0, ROOM)
+            for i in range(rain_n):
+                ax.plot([rx[i], rx[i]], [ry[i], ry[i]], [rz_top[i], rz_bot[i]],
+                        color="#93c5fd", lw=0.8, alpha=min(0.9, rain * 1.2))
+
+        # Wind arrows at drone altitude (pointing right, varying strength)
+        n_wind = int(wind / 2) + 1
+        for i in range(n_wind):
+            wy = -ROOM*0.6 + i * (ROOM * 1.2 / max(1, n_wind - 1))
+            ax.quiver(-ROOM*0.7, wy, ALT, wind * 0.25, 0, 0,
+                      length=0.8, color="#f97316", alpha=0.7,
+                      arrow_length_ratio=0.4, linewidth=1.5)
+
+        # Drone (X-frame with rotors)
+        arm = 0.38
+        for ang in [45, 135, 225, 315]:
+            rad = _math.radians(ang)
+            ex, ey = arm*_math.cos(rad), arm*_math.sin(rad)
+            ax.plot([0, ex], [0, ey], [ALT, ALT], color="#7dd3fc", lw=2.5, zorder=10)
+            th_r = np.linspace(0, 2*_math.pi, 12)
+            ax.plot(ex + 0.14*np.cos(th_r), ey + 0.14*np.sin(th_r),
+                    [ALT]*12, color="#60a5fa", lw=1.2, alpha=0.8)
+        ax.scatter([0], [0], [ALT], color="#7dd3fc", s=60, depthshade=False, zorder=11)
+
+        # Umbrella canopy above drone
+        umb_h = ALT + 0.65
+        if umbrella_open:
+            # Open umbrella — disc with spokes
+            umb_r = 1.2
+            ax.plot(umb_r*np.cos(th), umb_r*np.sin(th), np.full(40, umb_h),
+                    color="#22c55e", lw=3.0, zorder=12)
+            for ang in range(0, 360, 45):
+                rad = _math.radians(ang)
+                ax.plot([0, umb_r*_math.cos(rad)], [0, umb_r*_math.sin(rad)],
+                        [umb_h, umb_h], color="#22c55e", lw=1.5, alpha=0.8)
+            ax.plot([0, 0], [0, 0], [ALT, umb_h], color="#22c55e", lw=2, alpha=0.9)
+        else:
+            # Folded umbrella — thin vertical line
+            ax.plot([0, 0], [0, 0], [ALT, umb_h + 0.3], color="#475569", lw=2.5, alpha=0.7)
+
+        # Decision label in 3D scene
+        dec_col = "#4ade80" if umbrella_open else "#94a3b8"
+        dec_txt = "☂ DEPLOY" if umbrella_open else "✕ STOW"
+        ax.text2D(0.5, 0.03, dec_txt, transform=ax.transAxes,
+                  ha="center", color=dec_col, fontsize=14, fontweight="bold")
+
+        ax.set_xlim(-ROOM, ROOM); ax.set_ylim(-ROOM, ROOM); ax.set_zlim(0, ROOM + 0.5)
+        ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([0, ALT, ROOM])
+        ax.zaxis.set_ticklabels(["ground", f"{ALT}m", "sky"], fontsize=8, color="#94a3b8")
+        self._sub2_azim  # reuse azim counter — use a separate one
+        if not hasattr(self, "_sub3_azim"):
+            self._sub3_azim = -50.0
+        self._sub3_azim = (self._sub3_azim + 0.3) % 360
+        ax.view_init(elev=18, azim=self._sub3_azim)
+
+        # ── Right panel: gauges + decision + confusion matrix ─────────────────
+        ax_c = self._sub3_ax_chart
+        ax_c.cla()
+        ax_c.set_facecolor(_MPL_BG)
+        for sp in ax_c.spines.values():
+            sp.set_color(_MPL_EDGE)
+        ax_c.set_xticks([]); ax_c.set_yticks([])
+        ax_c.set_title("SVM Decision & Weather", color=_MPL_TITLE, fontsize=12, pad=5)
+
+        # Weather gauges — horizontal bars
+        bar_y  = [0.78, 0.65, 0.52]
+        labels = ["Lux", "Rain", "Wind"]
+        vals   = [min(1.0, lux/100000), rain, min(1.0, wind/10)]
+        cols   = ["#fbbf24", "#60a5fa", "#67e8f9"]
+        for y, lbl, val, col in zip(bar_y, labels, vals, cols):
+            ax_c.barh(y, val, height=0.09, color=col, alpha=0.85,
+                      transform=ax_c.transAxes, left=0.12)
+            ax_c.text(0.02, y, lbl, transform=ax_c.transAxes,
+                      color=col, fontsize=11, fontweight="bold", va="center")
+            ax_c.text(0.98, y, f"{val:.2f}", transform=ax_c.transAxes,
+                      color=col, fontsize=10, va="center", ha="right")
+
+        # Phase label
+        phases = ["Clear ☀", "Cloudy ⛅", "Rainy 🌧", "Storm ⛈"]
+        phase_idx = int(phase * 4) % 4
+        ax_c.text(0.5, 0.44, phases[phase_idx], transform=ax_c.transAxes,
+                  ha="center", color="#cbd5e1", fontsize=12)
+
+        # Big decision banner
+        ax_c.text(0.5, 0.30, dec_txt,
+                  transform=ax_c.transAxes, ha="center",
+                  color=dec_col, fontsize=22, fontweight="bold")
+
+        # Confusion matrix (after training)
+        if self._sub3_cm is not None:
+            cm = self._sub3_cm
+            total = cm.sum()
+            cm_labels = [["TN\nStow✓", "FP\nDeploy✗"], ["FN\nStow✗", "TP\nDeploy✓"]]
+            cm_cols   = [["#16a34a", "#dc2626"], ["#dc2626", "#16a34a"]]
+            for ri in range(2):
+                for ci in range(2):
+                    bx = 0.08 + ci * 0.43
+                    by = 0.00 + ri * 0.13
+                    ax_c.add_patch(__import__("matplotlib.patches", fromlist=["FancyBboxPatch"])
+                                   .FancyBboxPatch((bx, by), 0.38, 0.11,
+                                                   boxstyle="round,pad=0.01",
+                                                   transform=ax_c.transAxes,
+                                                   facecolor=cm_cols[ri][ci], alpha=0.75,
+                                                   edgecolor="#334155", linewidth=1))
+                    ax_c.text(bx + 0.19, by + 0.06,
+                              f"{cm[ri, ci]}  {cm_labels[ri][ci]}",
+                              transform=ax_c.transAxes, ha="center", va="center",
+                              color="white", fontsize=8, fontweight="bold")
+
+            ax_c.text(0.5, -0.01,
+                      f"CV accuracy: {self._sub3_accuracy:.1%}" if self._sub3_accuracy else "",
+                      transform=ax_c.transAxes, ha="center",
+                      color="#4ade80", fontsize=10, fontweight="bold")
+
+        self._sub3_canvas.draw_idle()
 
     def _start_sub2(self):
         if self._sub2_training:
@@ -2675,8 +2955,34 @@ class TrainingGroundsHub:
                 self._nav_status_var.set(f"Error: {msg[1][:100]}")
                 changed_nav = True
 
+        # Drain Sub-3 SVM queue
+        while True:
+            try:
+                msg = self._sub3_queue.get_nowait()
+            except queue.Empty:
+                break
+            k = msg[0]
+            if k == "progress":
+                self._sub3_status_var.set(msg[1])
+            elif k == "done":
+                _, path, acc, cm = msg
+                self._sub3_training  = False
+                self._sub3_ready     = os.path.exists(self._SVM_PATH)
+                self._sub3_accuracy  = acc
+                self._sub3_cm        = cm
+                self._sub3_clf       = None   # reload on next tick
+                self._sub3_train_btn.configure(state="normal", text="Train SVM")
+                self._sub3_status_var.set(
+                    f"✓ SVM trained — CV accuracy {acc:.1%}  "
+                    f"({'≥90% target met' if acc >= 0.9 else 'below 90% target'})")
+            elif k == "error":
+                self._sub3_training = False
+                self._sub3_train_btn.configure(state="normal", text="Train SVM")
+                self._sub3_status_var.set(f"Error: {msg[1][:100]}")
+
         # Always redraw 3D scenes so the auto-rotation stays alive
         self._update_sub2_plot()
+        self._update_sub3_plot()
         self._update_sub4_plot()
 
         # Drain Sub-2 eval queue
@@ -2749,6 +3055,7 @@ class TrainingGroundsHub:
 
     def close(self):
         self._sub2_stop.set()
+        self._sub3_stop.set()
         self._sub4_stop.set()
         self._nav_stop.set()
         self._sub2_eval_stop.set()
@@ -3126,7 +3433,7 @@ class ScenarioLauncher:
         _BTN = {
             "camera":      ("Calibrate",  "#166534", "#dcfce7"),
             "flight":      ("Train PPO",  "#1e3a8a", "#bfdbfe"),
-            "weather":     ("View SVM",   "#1e293b", "#94a3b8"),
+            "weather":     ("Train SVM",  "#831843", "#fce7f3"),
             "safety":      ("Solve MDP",  "#4c1d95", "#ddd6fe"),
             "environment": ("Select",     "#1e293b", "#94a3b8"),
         }
@@ -3156,7 +3463,7 @@ class ScenarioLauncher:
 
 
     def _open_training_ground(self, key):
-        tab_map = {"camera": 0, "flight": 1, "safety": 2}
+        tab_map = {"camera": 0, "flight": 1, "weather": 2, "safety": 3}
         self._open_training_hub(tab_map.get(key, 0))
 
         if key == "environment":
@@ -3324,8 +3631,12 @@ class ScenarioLauncher:
                                 "models", "ppo_flight_v1.zip")
         mdp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "models", "policy_table_v1.npy")
+        svm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "models", "svm_v1.pkl")
         if not os.path.exists(ppo_path):
             missing.append("Sub-2 Flight PPO (ppo_flight_v1.zip)")
+        if not os.path.exists(svm_path):
+            missing.append("Sub-3 Weather SVM (svm_v1.pkl)")
         if not os.path.exists(mdp_path):
             missing.append("Sub-4 Nav Safety (policy_table_v1.npy)")
         return missing
