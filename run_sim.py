@@ -1647,6 +1647,15 @@ class TrainingGroundsHub:
         self._sub2_azim = -55.0
         self._sub4_azim = -60.0
 
+        # ── Auto-train sequence ───────────────────────────────────────────────
+        # Stages: 0=sub2, 1=sub3, 2=sub4_mdp, 3=sub4_nav, 4=done, -1=idle
+        self._auto_stage      = -1
+        self._auto_retrain    = False
+        self._auto_started    = False   # True once current stage has been kicked off
+        self._auto_on_complete = None   # callback when all done
+        self._auto_banner_var  = None   # StringVar for top banner
+        self._auto_total_steps = [100_000, 0, 0, 80_000]  # steps per stage
+
         # ── Evaluation state ──────────────────────────────────────────────────
         self._sub2_eval_queue  = queue.Queue()
         self._sub2_eval_stop   = threading.Event()
@@ -1694,6 +1703,15 @@ class TrainingGroundsHub:
                  fg="#60a5fa", bg="#07111f", font=("Arial", 14, "bold")).pack(side="left")
         tk.Label(hdr, text="Train each subsystem before launching the simulation.",
                  fg="#475569", bg="#07111f", font=("Arial", 10)).pack(side="left", padx=(14, 0))
+
+        # Auto-train progress banner (hidden until auto-train starts)
+        self._auto_banner_var = tk.StringVar(value="")
+        self._auto_banner_lbl = tk.Label(
+            self.window, textvariable=self._auto_banner_var,
+            fg="#4ade80", bg="#0f172a",
+            font=("Arial", 11, "bold"), anchor="center", pady=7,
+        )
+        # Packed dynamically when auto-train starts
 
         # Notebook
         style = ttk.Style()
@@ -1999,9 +2017,118 @@ class TrainingGroundsHub:
                 f"   Sub-4 MDP {s4}   Sub-4 Nav {sn}")
 
     def select_tab(self, idx: int):
-        """Select a tab by 0-based index (0=Sub-1, 1=Sub-2, 2=Sub-4)."""
+        """Select a tab by 0-based index (0=Sub-1, 1=Sub-2, 2=Sub-3, 3=Sub-4)."""
         if self._nb is not None:
             self._nb.select(idx)
+
+    # ── Auto-Train sequence ───────────────────────────────────────────────────
+
+    def start_auto_train(self, retrain: bool = False, on_complete=None):
+        """Fully-automatic sequential training of all subsystems.
+
+        Stages:
+          0 — Sub-2 Flight PPO   100k steps  ~60 sec (4 parallel envs)
+          1 — Sub-3 Weather SVM  always < 5 sec
+          2 — Sub-4 Battery MDP  always < 2 sec
+          3 — Sub-4 Nav SAC      80k steps   ~50 sec
+        Total: ~2–3 min
+        """
+        if self._auto_stage >= 0:
+            return  # already running
+
+        self._auto_retrain     = retrain
+        self._auto_stage       = 0
+        self._auto_started     = False
+        self._auto_on_complete = on_complete
+
+        if retrain:
+            for path in [self._PPO_PATH, self._PPO_PATH.replace(".zip", "")]:
+                try:
+                    if os.path.exists(path): os.remove(path)
+                except Exception: pass
+            nav = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "models", "ppo_nav_v1")
+            for path in [nav, nav + ".zip"]:
+                try:
+                    if os.path.exists(path): os.remove(path)
+                except Exception: pass
+            self._sub2_runs.clear()
+            self._sub2_efficiency = ""
+
+        self._auto_banner_lbl.pack(fill="x", before=self._nb)
+        self._auto_banner_var.set(
+            "🚀  Auto-Train  Step 1 / 4 — Sub-2 Flight PPO (~60 sec)…")
+        self.window.lift()
+        self.window.focus_force()
+
+    def _auto_tick(self):
+        """Drive the auto-train state machine — called every hub tick."""
+        stage = self._auto_stage
+        if stage < 0 or stage >= 4:
+            return
+
+        LABELS = [
+            "Step 1 / 4 — Sub-2 Flight PPO  (~60 sec)",
+            "Step 2 / 4 — Sub-3 Weather SVM  (~5 sec)",
+            "Step 3 / 4 — Sub-4 Battery MDP  (~2 sec)",
+            "Step 4 / 4 — Sub-4 Nav SAC      (~50 sec)",
+        ]
+
+        if stage == 0:
+            if not self._auto_started:
+                self.select_tab(1)
+                self._sub2_steps_var.set("100000")
+                self._start_sub2()
+                self._auto_started = True
+                self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[0]}")
+            elif not self._sub2_training:
+                self._auto_stage = 1; self._auto_started = False
+
+        elif stage == 1:
+            if not self._auto_started:
+                self.select_tab(2)
+                self._start_sub3()
+                self._auto_started = True
+                self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[1]}")
+            elif not self._sub3_training:
+                self._auto_stage = 2; self._auto_started = False
+
+        elif stage == 2:
+            if not self._auto_started:
+                self.select_tab(3)
+                self._start_sub4()
+                self._auto_started = True
+                self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[2]}")
+            elif not self._sub4_training:
+                self._auto_stage = 3; self._auto_started = False
+
+        elif stage == 3:
+            if not self._auto_started:
+                self._nav_steps_var.set("80000")
+                self._start_nav()
+                self._auto_started = True
+                self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[3]}")
+            elif not self._nav_training:
+                self._auto_stage = 4
+                self._show_auto_complete()
+
+    def _show_auto_complete(self):
+        """Replace banner with a green completion summary."""
+        self._auto_stage = -1
+
+        s2 = self._sub2_efficiency or "Sub-2 PPO ✓"
+        s3 = (f"Sub-3 SVM {self._sub3_accuracy:.0%} ✓"
+              if self._sub3_accuracy else "Sub-3 SVM ✓")
+        s4n = self._nav_efficiency or "Sub-4 Nav ✓"
+
+        self._auto_banner_var.set(
+            f"✅  Training complete!   {s2}  ·  {s3}  ·  Sub-4 MDP ✓  ·  {s4n}"
+            "   →  Select a scenario in the Launcher and click Launch.")
+        self._auto_banner_lbl.configure(fg="#4ade80", bg="#052e16")
+
+        if self._auto_on_complete:
+            try: self._auto_on_complete()
+            except Exception: pass
 
     # ── Sub-1 controls & plot ─────────────────────────────────────────────────
 
@@ -3269,6 +3396,9 @@ class TrainingGroundsHub:
                 self._nav_status_var.set(f"Eval error: {msg[1][:80]}")
 
         self._gate_var.set(self._gate_text())
+        # Advance auto-train sequence if active
+        if self._auto_stage >= 0:
+            self._auto_tick()
         self.window.after(350, self._tick)
 
     # _do_launch removed — hub is training-only; sim launch uses main Launcher
@@ -3580,7 +3710,7 @@ class ScenarioLauncher:
             )
 
         self.training_status_var = tk.StringVar(
-            value="Click any subsystem card to open the Training Grounds hub — train Sub-2 PPO and Sub-4 MDP before launching."
+            value="Click any card to train individually, or use Auto-Train to train all systems at once."
         )
         tk.Label(
             panel,
@@ -3594,6 +3724,32 @@ class ScenarioLauncher:
             padx=10,
             pady=8,
         ).grid(row=3, column=0, sticky="ew", pady=(8, 0))
+
+        # ── Auto-Train buttons ─────────────────────────────────────────────────
+        auto_frame = tk.Frame(panel, bg="#0b1120")
+        auto_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        auto_frame.grid_columnconfigure(0, weight=1)
+        auto_frame.grid_columnconfigure(1, weight=1)
+
+        tk.Button(
+            auto_frame,
+            text="🚀  Auto-Train All  (~3 min)",
+            command=lambda: self._launch_auto_train(retrain=False),
+            bg="#166534", fg="#dcfce7",
+            activebackground="#14532d", activeforeground="#ffffff",
+            relief="flat", font=("Arial", 11, "bold"),
+            padx=14, pady=10,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        tk.Button(
+            auto_frame,
+            text="🔄  Auto-Retrain from Scratch",
+            command=lambda: self._launch_auto_train(retrain=True),
+            bg="#78350f", fg="#fef3c7",
+            activebackground="#92400e", activeforeground="#ffffff",
+            relief="flat", font=("Arial", 11, "bold"),
+            padx=14, pady=10,
+        ).grid(row=0, column=1, sticky="ew")
 
     def _training_ground_card(self, parent, row, col, item, compact=False):
         key, title, tag, description, accent = item
@@ -3658,6 +3814,21 @@ class ScenarioLauncher:
             padx=10,
             pady=6,
         ).grid(row=0, column=1, rowspan=3, sticky="e", padx=(8, 0))
+
+    def _launch_auto_train(self, retrain: bool = False):
+        """Open the hub and immediately start the auto-train sequence."""
+        if self.training_hub is None or self.training_hub.closed:
+            self.training_hub = TrainingGroundsHub(self.root)
+        else:
+            self.training_hub.window.lift()
+        self.training_hub.start_auto_train(retrain=retrain,
+                                            on_complete=self._on_auto_train_complete)
+
+    def _on_auto_train_complete(self):
+        """Called by the hub when all auto-training is done."""
+        if self.training_status_var:
+            self.training_status_var.set(
+                "✓ All systems trained! Select a scenario and click Launch.")
 
     def _open_training_hub(self, tab_idx: int = 0):
         """Open (or focus) the unified TrainingGroundsHub and select a tab."""
