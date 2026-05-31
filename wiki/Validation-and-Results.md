@@ -180,7 +180,7 @@ python run_sim.py --demo-low-battery
 
 ---
 
-## Sub-4: Nav PPO — how to verify
+## Sub-4: Nav SAC — how to verify
 
 ### In the Training Grounds hub
 
@@ -253,7 +253,7 @@ python sub4_nav/test_nav_safety.py
 | `models/ppo_flight_v1.zip` | Sub-2 trained PPO hover policy |
 | `models/svm_v1.pkl` | Sub-3 trained SVM umbrella classifier |
 | `models/policy_table_v1.npy` | Sub-4 solved MDP policy (12 integers) |
-| `models/ppo_nav_v1.zip` | Sub-4 trained PPO obstacle navigation policy |
+| `models/ppo_nav_v1.zip` | Sub-4 trained **SAC** obstacle navigation policy (legacy filename) |
 | `confusion_matrix.png` | Sub-3 SVM confusion matrix (training set) |
 | `pca_3d.png` | Sub-3 3-D PCA of the 9-D weather feature space |
 | `convergence_curve.png` | Sub-4 MDP Bellman delta per iteration |

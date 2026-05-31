@@ -18,7 +18,7 @@ Click each card on the left panel in order:
 | 2 | Sub-2 Flight | **Train PPO** | ~8 min first / ~5 min repeat | `models/ppo_flight_v1.zip` |
 | 3 | Sub-3 Weather | **Train SVM** | < 2 seconds | `models/svm_v1.pkl` |
 | 4 | Sub-4 Nav Safety | **Solve MDP** | < 1 second | `models/policy_table_v1.npy` |
-| 4b | Sub-4 Nav Safety | **Train Navigation** | ~3 min first / ~2 min repeat | `models/ppo_nav_v1.zip` |
+| 4b | Sub-4 Nav Safety | **Train Navigation** | ~3 min first / ~2 min repeat | `models/ppo_nav_v1.zip` (SAC weights, legacy filename) |
 
 Once all five model files exist, the footer badges turn `●` and the **Launch** button works.
 
@@ -195,9 +195,9 @@ This is the optimal policy given the reward structure. The drone always prefers 
 
 ---
 
-## Sub-4: Obstacle Navigation PPO
+## Sub-4: Obstacle Navigation SAC
 
-The nav PPO agent learns to fly the drone from one side of a 10 × 8 m room to the other, using 8 lidar rays to detect and avoid 7 cylindrical obstacles.
+The SAC nav agent learns to fly the drone from one side of a 10 × 8 m room to the other, using 8 lidar rays to detect and avoid 7 cylindrical obstacles.
 
 ### What the training does
 
@@ -248,4 +248,4 @@ python sub4_nav/solve_mdp.py --output models/policy_table_v1.npy  # MDP only
 | Sub-2 Flight PPO | Evaluate shows ≥ 3/5 episodes hovering; efficiency ≥ 60% | `models/ppo_flight_v1.zip` |
 | Sub-3 Weather SVM | CV accuracy ≥ 90%; umbrella deploys in rain, stows in clear | `models/svm_v1.pkl` |
 | Sub-4 Battery MDP | Policy table solved; CRITICAL → LAND, LOW/MED/HIGH → RTH | `models/policy_table_v1.npy` |
-| Sub-4 Nav PPO | Evaluate shows ≥ 3/5 episodes reaching the goal | `models/ppo_nav_v1.zip` |
+| Sub-4 Nav SAC | Evaluate shows ≥ 3/5 episodes reaching the goal | `models/ppo_nav_v1.zip` (SAC weights, legacy filename) |

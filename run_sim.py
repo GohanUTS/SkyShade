@@ -103,7 +103,7 @@ TRAINING_GROUND_ITEMS = (
     ("camera",   "Sub-1 Perception", "HSV tracker", "3D calibration room — live red-marker lock check.", "#22c55e"),
     ("flight",   "Sub-2 Flight",     "PPO",          "3D hover arena — PPO wind-gust curriculum training.", "#60a5fa"),
     ("weather",  "Sub-3 Weather",    "SVM",          "3D weather scene — umbrella deploy/stow SVM decision.", "#f472b6"),
-    ("safety",   "Sub-4 Nav Safety", "MDP + PPO",    "3D obstacle room — lidar navigation + battery safety.", "#f59e0b"),
+    ("safety",   "Sub-4 Nav Safety", "MDP + SAC",    "3D obstacle room — lidar navigation (SAC) + battery safety.", "#f59e0b"),
 )
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
@@ -1880,8 +1880,8 @@ class TrainingGroundsHub:
         nav_ctrl.grid_columnconfigure(1, weight=1)
 
         self._nav_status_var = tk.StringVar(
-            value="● READY — ppo_nav_v1.zip found" if self._nav_ready
-            else "○ NOT TRAINED — click Train Navigation to start PPO")
+            value="● READY — nav model found (SAC)" if self._nav_ready
+            else "○ NOT TRAINED — click Train Navigation (SAC, ~3× faster than PPO)")
         tk.Label(nav_ctrl, textvariable=self._nav_status_var,
                  fg="#94a3b8", bg="#07111f", font=("Arial", 10, "bold"), anchor="w"
                  ).grid(row=0, column=0, columnspan=4, sticky="w")
@@ -2749,7 +2749,7 @@ class TrainingGroundsHub:
         else:
             ax.scatter([-hw+0.5], [0], [NAV_ALT], color="#7dd3fc", s=120,
                        marker="o", depthshade=False)
-            ax.text2D(0.5, 0.05, "Click 'Train Navigation' — drone appears live",
+            ax.text2D(0.5, 0.05, "Click 'Train Navigation' (SAC) — drone + lidar rays appear live",
                       transform=ax.transAxes, ha="center", color="#94a3b8", fontsize=9)
 
         # Evaluation path overlay (bright green — best eval episode)
@@ -2850,10 +2850,10 @@ class TrainingGroundsHub:
         self._nav_start_btn.configure(state="disabled")
         self._nav_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                      activebackground="#b91c1c")
-        warm_note = "Fine-tuning existing nav model…" if os.path.exists(self._NAV_PATH) else "Training from scratch…"
+        warm_note = "SAC fine-tuning from existing model…" if os.path.exists(self._NAV_PATH) else "SAC training from scratch…"
         self._nav_status_var.set(
             f"{warm_note}  ~{max(1, total // 10000)} min on CPU  "
-            "(each run improves the previous model)")
+            "· off-policy replay buffer · auto-entropy exploration")
 
     def _stop_nav(self):
         if not self._nav_training:
@@ -2980,11 +2980,11 @@ class TrainingGroundsHub:
                 self._nav_start_btn.configure(state="normal")
                 self._nav_stop_btn.configure(state="disabled", bg="#334155",
                                               fg="#94a3b8", activebackground="#475569")
-                warm_str = "fine-tuned from previous model" if warm else "trained from scratch"
+                warm_str = "SAC fine-tuned from previous model" if warm else "SAC trained from scratch"
                 eff_str  = (f"predicted navigation success  ~{eff}%"
                             if k == "done" else "partial save")
                 self._nav_efficiency = (
-                    f"✓ Model trained — {eff_str}  ({warm_str})" if k == "done"
+                    f"✓ SAC model trained — {eff_str}  ({warm_str})" if k == "done"
                     else f"⏹ Stopped at {steps:,} steps — {eff_str}")
                 self._nav_status_var.set(self._nav_efficiency)
                 changed_nav = True

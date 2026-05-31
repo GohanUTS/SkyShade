@@ -1,7 +1,7 @@
 """
-Sub-4 Nav — PPO obstacle navigation evaluation worker.
+Sub-4 Nav — SAC obstacle navigation evaluation worker.
 
-Runs the trained nav PPO model for N_EVAL episodes and streams per-episode
+Runs the trained SAC nav model for N_EVAL episodes and streams per-episode
 results including the drone's full path so the training ground can visualise
 the actual trajectory through the obstacle room.
 
@@ -38,10 +38,10 @@ class NavEvalWorker(threading.Thread):
 
     def run(self):
         try:
-            from stable_baselines3 import PPO
+            from stable_baselines3 import SAC
             from sub4_nav.obstacle_env import ObstacleNavEnv, GOAL_R
 
-            model = PPO.load(_MODEL_PATH)
+            model = SAC.load(_MODEL_PATH)
 
             rewards, successes, all_paths = [], [], []
 

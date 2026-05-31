@@ -41,7 +41,7 @@ The hub window is titled **SkyShade — Training Grounds** and has three tabs al
 │                                                                      │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Sub-1 Perception ●   Sub-2 Flight PPO ○   Sub-4 Battery MDP ●     │
-│  Sub-4 Nav PPO ●   Launch the main sim from the SkyShade Launcher.  │
+│  Sub-4 Nav SAC ●   Launch the main sim from the SkyShade Launcher.  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -265,7 +265,7 @@ A 10 × 8 × 3.5 m room with 7 cylindrical pillars. The auto-rotating scene show
 ✓ Model trained — predicted navigation success ~61%  (fine-tuned from previous model)
 ```
 
-### Right panel — Nav PPO Reward Curve
+### Right panel — Nav SAC Reward Curve
 
 - **Teal line** — mean episode reward per rollout
 - Reward starts low (drone crashing/getting stuck) and trends upward as the policy learns to avoid obstacles
@@ -276,7 +276,7 @@ A 10 × 8 × 3.5 m room with 7 cylindrical pillars. The auto-rotating scene show
 | Control | Description |
 |---|---|
 | **Steps** entry | Default 150 000 ≈ 3 min first run |
-| **Train Navigation** | Starts PPO obstacle-avoidance training |
+| **Train Navigation** | Starts SAC obstacle-avoidance training (~3× faster than PPO) |
 | **Stop** | Stops training and saves the partial model |
 | **Evaluate Model** | Runs 5 test episodes; draws best path in green |
 

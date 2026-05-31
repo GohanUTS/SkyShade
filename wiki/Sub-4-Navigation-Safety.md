@@ -5,7 +5,7 @@ Sub-4 has two independent policies that run together:
 | Policy | Algorithm | Model file | Purpose |
 |---|---|---|---|
 | **Battery Safety** | MDP value iteration | `models/policy_table_v1.npy` | Override flight when battery / distance is critical |
-| **Obstacle Navigation** | PPO (continuous) | `models/ppo_nav_v1.zip` | Navigate a room with obstacles using 8 lidar rays |
+| **Obstacle Navigation** | **SAC** (off-policy, continuous) | `models/ppo_nav_v1.zip` | Navigate a room with obstacles using 8 lidar rays |
 
 ---
 
@@ -59,7 +59,14 @@ python sub4_nav/solve_mdp.py --gamma 0.95 --output models/policy_table_v1.npy
 
 ---
 
-## Obstacle Navigation — PPO policy
+## Obstacle Navigation — SAC policy
+
+**Algorithm:** Soft Actor-Critic (SAC) — off-policy, sample-efficient reinforcement learning.
+
+SAC was chosen over PPO because:
+- **Off-policy replay buffer** — stores all past experience and relearns from it; ~3× fewer env steps to converge
+- **Automatic entropy tuning** — no manual curriculum stages needed; the agent self-regulates exploration vs exploitation
+- **Continuous action space** — native fit for velocity-setpoint control
 
 ### Responsibility
 
@@ -99,15 +106,23 @@ reward = (prev_dist - dist) × 8.0   # progress toward goal
        - 30.0    (on wall hit)        # boundary penalty
 ```
 
-### PPO hyperparameters
+### SAC hyperparameters
 
 ```python
-PPO("MlpPolicy", env,
-    n_steps=2048, batch_size=64, n_epochs=10,
-    gamma=0.995, gae_lambda=0.95,
-    learning_rate=3e-4, ent_coef=0.02,
-    policy_kwargs={"net_arch": [256, 256]})
+SAC("MlpPolicy", env,
+    learning_rate   = 3e-4,
+    buffer_size     = 100_000,   # off-policy replay memory (all past experience)
+    batch_size      = 256,       # larger batches for stable Q-function learning
+    tau             = 0.005,     # soft target-network update rate
+    gamma           = 0.99,
+    ent_coef        = "auto",    # automatic entropy: self-regulating exploration
+    learning_starts = 1_000,     # collect this many random steps before first update
+    train_freq      = 1,
+    gradient_steps  = 1,
+    policy_kwargs   = {"net_arch": [256, 256]})
 ```
+
+**Warm-start fine-tuning:** `learning_rate = 5e-5` (conservative refinement of existing weights).
 
 ---
 
@@ -126,7 +141,7 @@ The 3D room visualisation auto-rotates and shows:
 
 Two separate controls:
 
-1. **Train Navigation** (teal) — starts PPO obstacle-avoidance training (default 500 k steps, ~20–40 min depending on hardware)
+1. **Train Navigation** (teal) — starts **SAC** obstacle-avoidance training (default 150 k steps, ~3 min; SAC is ~3× more sample-efficient than PPO)
 2. **Solve Battery-Safety MDP** (purple) — runs value iteration, completes in under 1 second
 
 ### CLI usage
@@ -157,8 +172,8 @@ Click **Evaluate Model** in the Sub-4 tab. Runs 5 deterministic episodes and:
 | `sub4_nav/training_worker.py` | Background MDP solver thread (used by hub) |
 | `sub4_nav/policy_table.py` | Runtime battery-safety policy lookup |
 | `sub4_nav/obstacle_env.py` | PyBullet 10×8 m obstacle navigation environment |
-| `sub4_nav/nav_training_worker.py` | Background PPO nav training thread |
+| `sub4_nav/nav_training_worker.py` | Background **SAC** nav training thread (off-policy, replay buffer) |
 | `sub4_nav/eval_worker.py` | 5-episode nav evaluation worker |
 | `sub4_nav/test_nav_safety.py` | Battery-safety unit tests |
 | `models/policy_table_v1.npy` | Solved MDP battery-safety policy |
-| `models/ppo_nav_v1.zip` | Trained PPO obstacle navigation model |
+| `models/ppo_nav_v1.zip` | Trained **SAC** obstacle navigation model (filename is legacy PPO name) |
