@@ -1,6 +1,73 @@
 # Validation and Results
 
-This page covers how to verify each subsystem is working correctly — both through the Training Grounds hub and by running the test scripts directly.
+This page covers how to verify each subsystem is working — through the Training Grounds hub, via test scripts, and via the automatic post-run efficiency report printed in the terminal after every simulation.
+
+---
+
+## Post-Run Efficiency Report
+
+After every simulation run the terminal prints a graded report. This is the fastest way to see if training is working.
+
+```
+════════════════════════════════════════════════════════════
+  SkyShade — Post-Run Efficiency Report
+════════════════════════════════════════════════════════════
+  Sub-2  Hover accuracy   :  73.4%  ✓ good
+         Mean hover error  :  0.38 m  ✓ within 0.5m
+  Sub-1  Tracker lock     :  98.2%  ✓ reliable
+  Sub-3  Umbrella correct :  91.7%  ✓ accurate
+  Sub-4  Battery at end   :  42.0%  ✓ safe
+════════════════════════════════════════════════════════════
+  Overall system score: 87%  Grade: A
+════════════════════════════════════════════════════════════
+```
+
+### What each metric means
+
+| Metric | What is measured | Pass (✓) | OK (~) | Fail (✗) |
+|---|---|---|---|---|
+| **Hover accuracy** | % of sim time the drone was within 0.5 m of the user | ≥ 70% | ≥ 40% | < 40% |
+| **Mean hover error** | Average XY distance from user throughout the sim | ≤ 0.5 m | ≤ 1.0 m | > 1.0 m |
+| **Tracker lock** | % of frames where Sub-1 confidence ≥ 0.7 | ≥ 80% | ≥ 60% | < 60% |
+| **Umbrella correct** | % of time umbrella state matched rain conditions | ≥ 85% | ≥ 65% | < 65% |
+| **Battery at end** | Remaining battery when sim ends | ≥ 30% | ≥ 10% | < 10% |
+
+### Overall grade
+
+The overall score is `(hover accuracy + tracker lock + umbrella accuracy) / 3`.
+
+| Grade | Score | Meaning |
+|---|---|---|
+| A | ≥ 80% | All subsystems performing well — good to demo |
+| B | ≥ 65% | Solid — minor training improvements would help |
+| C | ≥ 50% | Some subsystems need more training |
+| D | < 50% | One or more subsystems critically underperforming |
+
+### If the score is low — what to do
+
+The report prints specific advice, e.g.:
+- `→ Train Sub-2 PPO more (hover accuracy is the bottleneck)` — click Fine-tune in Sub-2 tab
+- `→ Check Sub-1 calibration (tracker confidence is low)` — open Sub-1 Calibrate tab
+- `→ Retrain Sub-3 SVM (umbrella decisions are inaccurate)` — click 🔄 Train/Retrain SVM
+
+### Console log (every 5 seconds)
+
+During the sim, the terminal prints a row every 5 seconds:
+
+```
+  Time     Bat  Nav         Flight   Umbrella   Conf   ErrXY      Z
+---------------------------------------------------------------------------
+   0.0s  100.0%  CONTINUE    PPO      STOW      1.00    0.00m  2.50m
+   5.0s   97.5%  CONTINUE    PPO      STOW      1.00    0.12m  2.48m
+  10.0s   95.0%  CONTINUE    PPO      STOW      0.98    0.34m  2.51m
+  45.9s   77.0%  CONTINUE    PPO      DEPLOY    1.00    0.37m  2.41m
+```
+
+- **ErrXY** is the most important live metric — how far the drone is from the user
+- **Conf** — Sub-1 tracker confidence (should stay ≥ 0.7)
+- **Umbrella DEPLOY** appearing means Sub-3 detected rain
+
+---
 
 ---
 

@@ -63,8 +63,14 @@ To validate the model before launching, click **Evaluate Model** in the Sub-2 or
 ### Full integrated simulation (GUI)
 
 ```bash
+# If you activated the venv (recommended):
 python run_sim.py
+
+# Or use python3 directly (no venv activation needed):
+python3 run_sim.py
 ```
+
+> **Note:** `python` may not be found on some systems — use `python3`. If your venv is active (`source venv/bin/activate`), both `python` and `python3` work.
 
 A PyBullet window opens with the drone, user, and environment. A HUD overlay shows battery, nav override, umbrella state, tracking confidence, hover error, and altitude.
 
@@ -105,6 +111,22 @@ ros2 run skyshade nav_safety_node
 - Weather cycles clear → cloudy → rainy every 60 s
 - Battery drains at 0.5% per second; the Sub-4 MDP triggers RTH when battery falls below the safe threshold
 - The umbrella disc turns green on `DEPLOY`, grey on `STOW`
+- The terminal logs a row every 5 seconds showing: `Time  Bat  Nav  Flight  Umbrella  Conf  ErrXY  Z`
+- **After the simulation ends**, the terminal prints a full **Efficiency Report** with grades for each subsystem — see [Validation and Results](Validation-and-Results) for how to read it
+
+### Via ROS 2 launch (advanced)
+
+The ROS 2 launch approach starts separate processes for each subsystem node. It requires the subsystem packages to be on the Python path:
+
+```bash
+cd /home/slal/ros2_ws
+colcon build
+source install/setup.bash
+export PYTHONPATH=$PYTHONPATH:/home/slal/ros2_ws/src/SkyShade
+ros2 launch skyshade skyshade_sim.launch.py
+```
+
+> For most users, `python3 run_sim.py` is simpler and fully equivalent.
 
 ---
 

@@ -149,31 +149,42 @@ PPO Reward  ·  38% done  ·  ~14m left  ·  1024 steps/s
 
 ### Controls
 
-| Control | Description |
-|---|---|
-| **Timesteps** entry | How many steps to train (default 500 000 ≈ 8 min first run) |
-| **Start Training** | Begins PPO training in a background thread |
-| **Stop** | Signals the worker to stop; saves the partial model |
-| **Evaluate Model** | Runs 5 test episodes and draws the best path in the arena |
+| Control | Colour | Description |
+|---|---|---|
+| **Timesteps** entry | — | Steps to train. Default 500k. For a quick 1-min run use 100k. |
+| **Start Training** / **Fine-tune (Run N)** | Blue | Warm-starts from existing model; adds incremental improvement |
+| **🔄 Retrain from Scratch** | Amber | Deletes model file + chart history; trains from random weights |
+| **Stop** | Red (while running) | Stops training and saves the partial model |
+| **Evaluate Model (N/5 ✓)** | Teal | Runs 5 test episodes; draws best path in the arena |
+
+### Multi-run reward chart
+
+Each training session appears as a **different coloured line** on the reward chart:
+- Run 1: blue, Run 2: green, Run 3: orange, Run 4: purple, etc.
+- Completed runs remain as faded lines so you can compare improvement across sessions
+- Current active run draws on top with full brightness
+- A white moving-average line shows the smoothed trend
+- `↑ improving` / `→ flat` label shows whether the last 20 rollouts improved
+- **Initial dip is normal:** When fine-tuning, reward temporarily drops before rising — the optimizer is adjusting weights before settling on a better configuration
+
+### Speed: 4 parallel environments
+
+Training uses **4 parallel PyBullet physics servers** (one per CPU core):
+
+| Environments | Steps/sec | 100k steps |
+|---|---|---|
+| 1 (old) | ~572 | ~3 min |
+| 4 (current) | ~1 800–2 400 | **~50 sec** |
 
 ### Status bar messages
 
 | Message | Meaning |
 |---|---|
-| `Fine-tuning existing model… ~8 min on CPU` | A saved model was found; this run improves it |
-| `Training from scratch… ~8 min on CPU` | No model yet; this is the first run |
-| `Training PPO Stage 2 — Step 245k/500k` | Live progress during training |
-| `✓ Model trained — predicted hover efficiency ~73%  (fine-tuned from previous model)` | Training completed |
-| `⏹ Stopped at 180k steps — partial save` | User pressed Stop; model saved at that point |
-
-### Why training takes time
-
-PyBullet physics runs at approximately 1 000 steps/second on a CPU (no GPU needed). At the default of 500 k steps this is ~8 minutes. Each step involves:
-- 8 physics substeps in PyBullet
-- A neural network forward pass (small MLP: 256 × 256)
-- A reward computation
-
-**The more you train, the better it gets.** The warm-start means every "Start Training" click loads the existing model and adds improvement on top — you never lose prior learning. Run 3 × 8 min sessions to get a well-generalised policy.
+| `Run 2 — fine-tuning… 4 parallel envs ~1 min` | Warm-starting from Run 1's model |
+| `Run 1 — training from scratch… 4 parallel envs ~2 min` | First training session |
+| `Run 2 · 38% · ~2m left · 1924 steps/s` | Live ETA during training |
+| `✓ Run 2 done — predicted hover efficiency ~73% (fine-tuned)` | Training completed |
+| `⏹ Run 2 stopped at 180k steps — partial save` | User pressed Stop |
 
 ### Evaluate Model
 
@@ -212,31 +223,50 @@ The weather cycle runs automatically: **Clear ☀ → Cloudy ⛅ → Rainy 🌧 
 
 ### Right panel — SVM Decision & Weather
 
-- **Three horizontal gauge bars**: Lux (yellow), Rain (blue), Wind (cyan) — show current live values
-- **Phase label**: Clear / Cloudy / Rainy / Storm
-- **Large decision banner**: `☂ DEPLOY` (green) or `✕ STOW` (grey)
-- **2×2 confusion matrix** (appears after training):
-  - Green cells = correct predictions (TP/TN)
-  - Red cells = errors (FP/FN)
-  - Numbers show count of samples in each category
+The right panel has three sections, all updated every 200ms:
+
+**Weather gauges (top):** Three horizontal bars showing current sensor values with units:
+- **Lux** (yellow) — e.g. `17k lux`
+- **Rain** (blue) — e.g. `0.74`
+- **Wind** (cyan) — e.g. `4.0 m/s`
+
+**Decision banner (centre):** Large coloured banner with explanation:
+- `☂ DEPLOY` (green box) + `"Umbrella open — heavy rain detected"`
+- `✕ STOW` (dark box) + `"Umbrella closed — conditions clear"`
+
+**Confusion matrix (bottom, appears after training):** 2×2 grid with large count numbers and labels:
+
+| Cell | Colour | Meaning |
+|---|---|---|
+| Top-left | Green | **Correct stow** — weather was clear, correctly stayed closed |
+| Top-right | Red | **Wrong deploy** — weather was clear but umbrella opened (false positive) |
+| Bottom-left | Red | **Wrong stow** — it was raining but umbrella stayed closed (false negative) |
+| Bottom-right | Green | **Correct deploy** — it was raining, umbrella correctly opened |
+
+Below the matrix: `Accuracy: 96.0% ✓ passes 90% target` in green.
 
 ### Controls
 
-| Control | Description |
-|---|---|
-| **Train SVM** (pink) | Trains RBF SVM on `data/env_sensor_log.csv`, completes in < 2 sec |
+| Control | Colour | Description |
+|---|---|---|
+| **🔄 Train / Retrain SVM** | Pink | Trains on `data/env_sensor_log.csv` every time — always from scratch, < 2 sec |
+
+> The SVM doesn't "improve" with more training runs — it always trains on the same 99-sample CSV and reaches the same ~96% accuracy. To improve accuracy, add more samples to `data/env_sensor_log.csv`.
 
 ### Status bar messages
 
 | Message | Meaning |
 |---|---|
 | `Training SVM on weather sensor data…` | Training in progress |
-| `✓ SVM trained — CV accuracy 96.0%  (≥90% target met)` | Training succeeded |
-| `○ NOT TRAINED — click Train SVM` | Model file missing |
+| `✓ SVM trained — CV accuracy 96.0%  (≥90% target met)` | Training succeeded, model is good |
+| `○ NOT TRAINED — click Train / Retrain SVM` | Model file missing |
 
 ### There is no Evaluate button — validation is the live demo
 
-The weather cycle IS the evaluation. If the umbrella opens in rain and closes in clear, the model is correct. The confusion matrix after training shows quantitative accuracy.
+The 30-second weather cycle IS the evaluation. Watch the umbrella in the 3D scene:
+- **Clear ☀ / Cloudy ⛅** → umbrella folded (grey line) = correct
+- **Rainy 🌧 / Storm ⛈** → umbrella open (green disc) = correct
+If the umbrella doesn't respond correctly to the phase transitions, retrain.
 
 ---
 
@@ -273,12 +303,15 @@ A 10 × 8 × 3.5 m room with 7 cylindrical pillars. The auto-rotating scene show
 
 ### Controls — Navigation training (teal row)
 
-| Control | Description |
-|---|---|
-| **Steps** entry | Default 150 000 ≈ 3 min first run |
-| **Train Navigation** | Starts SAC obstacle-avoidance training (~3× faster than PPO) |
-| **Stop** | Stops training and saves the partial model |
-| **Evaluate Model** | Runs 5 test episodes; draws best path in green |
+| Control | Colour | Description |
+|---|---|---|
+| **Steps** entry | — | Default 150k ≈ 3 min first run; 30k ≈ ~50 sec repeat |
+| **Train Navigation** | Teal | SAC training — warm-starts from existing model if compatible |
+| **🔄 Retrain from Scratch** | Amber | Deletes model file; trains fresh SAC from random weights |
+| **Stop** | Red (active) | Stops training; saves partial model |
+| **Evaluate Model** | Teal | Runs 5 test episodes; draws best path as green trail |
+
+> **⚠ Old PPO model incompatibility:** If `ppo_nav_v1.zip` exists from old PPO training, clicking "Train Navigation" will detect the mismatch, **delete the incompatible file automatically**, and train a fresh SAC model. Status shows: `"⚠ Old PPO model was incompatible with SAC — deleted. Training from scratch…"`
 
 ### Controls — Battery Safety MDP (purple row, compact)
 

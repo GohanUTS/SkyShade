@@ -85,31 +85,50 @@ PPO("MlpPolicy", env,
 
 Open the launcher → click **Train PPO** → the Training Grounds hub opens on the Sub-2 tab.
 
-The 3D room visualisation shows:
-- **Room with floor grid and 4 walls** — the hover arena
-- **Quadcopter drone** (X-frame with 4 rotors) — animates with realistic drift per stage
-- **Green ring at 2.5 m** — the hover target zone
-- **Wind arrows** (stage 2+) — orange arrows rotating inward to show gusts
-- **Walking user** (stage 3) — purple figure orbiting the room floor
+### Speed: 4 parallel environments
 
-The reward chart shows:
-- Mean episode reward coloured by stage (blue / pink / purple)
-- Moving-average trend line
-- `↑ improving` / `→ flat` indicator
-- Estimated time remaining + steps/sec
+Training uses `SubprocVecEnv(n_envs=4)` — four independent PyBullet DIRECT processes, one per CPU core:
+
+| Setup | Steps/sec | 100k steps |
+|---|---|---|
+| Single env (old) | ~572 | ~3 min |
+| 4 parallel envs | ~1 800–2 400 | **~50 sec** |
+
+### 3D hover arena (auto-rotates)
+
+- **Room with floor grid and 4 walls** — the 7 × 7 m training space
+- **Quadcopter drone** (X-frame with 4 rotors) — drift increases with stage (shows harder conditions)
+- **Green ring at 2.5 m** — the hover target zone the drone must stay inside
+- **Wind arrows** (stage 2+) — orange quiver arrows rotating inward, count increases with stage
+- **Walking user** (stage 3) — purple figure orbiting the arena floor; drone must follow
+- **Stage label** (top-left) — explains what the drone is learning in plain English
+- **Efficiency banner** (bottom) — shows result after training completes or evaluation
+
+### Multi-run reward chart
+
+Each training session draws a **new coloured line** — Run 1 (blue), Run 2 (green), Run 3 (orange), etc. Past runs stay as faded lines so you can visually confirm improvement across sessions. The white moving-average shows the smoothed trend.
+
+An **initial dip** after warm-start is normal — the optimizer temporarily disrupts existing weights before settling on a better policy. The chart shows an annotated arrow explaining this.
+
+### Buttons
+
+- **Fine-tune (Run N)** — warm-starts from existing model at lower LR (`1e-4`), adds improvement
+- **🔄 Retrain from Scratch** — deletes model file + chart history, trains with random weights
+- **Evaluate Model** — runs 5 test episodes, draws best path as green trail
 
 ### CLI training
 
 ```bash
-python sub2_flight/train_ppo.py --steps 1500000 --output models/ppo_flight_v1
+python sub2_flight/train_ppo.py --steps 500000 --output models/ppo_flight_v1
 ```
 
 ### Evaluating before launch
 
-Click **Evaluate Model** in the hub. This runs 5 deterministic episodes on the trained policy (stage 2, gusty wind) and:
-- Shows each episode's hover rate and reward in the status bar
-- Draws the best episode's path as a **bright green trail** in the 3D room
-- Reports `PASS ✓ 4/5 hovered` or `FAIL ✗` — pass threshold is ≥30% of the episode spent within the 0.5 m hover radius
+Click **Evaluate Model** in the hub. This runs 5 deterministic episodes on stage 2 (gusty wind):
+- Per-episode status: `Eval ep 3/5 ✓  reward +184  hover 67%`
+- Draws the best episode path as a **bright green trail** in the 3D room — should circle near the hover ring
+- Reports `PASS ✓ 4/5 hovered` or `FAIL ✗`
+- Pass threshold: ≥ 3 of 5 episodes spend ≥ 30% of time within the 0.5 m hover radius
 
 ---
 

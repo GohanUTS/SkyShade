@@ -12,15 +12,17 @@ python run_sim.py        ← open the launcher
 
 Click each card on the left panel in order:
 
-| Step | Card | Button | Time | Result |
-|---|---|---|---|---|
-| 1 | Sub-1 Perception | **Calibrate** | Instant | Verify tracker — no model needed |
-| 2 | Sub-2 Flight | **Train PPO** | ~8 min first / ~5 min repeat | `models/ppo_flight_v1.zip` |
-| 3 | Sub-3 Weather | **Train SVM** | < 2 seconds | `models/svm_v1.pkl` |
-| 4 | Sub-4 Nav Safety | **Solve MDP** | < 1 second | `models/policy_table_v1.npy` |
-| 4b | Sub-4 Nav Safety | **Train Navigation** | ~3 min first / ~2 min repeat | `models/ppo_nav_v1.zip` (SAC weights, legacy filename) |
+| Step | Card | Button | First run | Repeat run | Result |
+|---|---|---|---|---|---|
+| 1 | Sub-1 Perception | **Calibrate** | Instant | Instant | No file — verify tracker only |
+| 2 | Sub-2 Flight | **Train PPO** | **~2 min** (4 parallel envs) | ~1 min fine-tune | `models/ppo_flight_v1.zip` |
+| 3 | Sub-3 Weather | **Train SVM** | < 2 sec | < 2 sec | `models/svm_v1.pkl` |
+| 4 | Sub-4 Nav Safety | **Solve MDP** | < 1 sec | < 1 sec | `models/policy_table_v1.npy` |
+| 5 | Sub-4 Nav Safety | **Train Navigation** | ~3 min (SAC) | ~1 min fine-tune | `models/ppo_nav_v1.zip` |
 
 Once all five model files exist, the footer badges turn `●` and the **Launch** button works.
+
+> **Speed note:** Sub-2 PPO training uses **4 parallel PyBullet environments** (one per CPU core), giving ~4× faster throughput than a single environment. 100k steps now completes in ~1 minute instead of ~3 minutes.
 
 ---
 
@@ -66,37 +68,56 @@ The PPO agent learns to keep the drone hovering within 0.5 m of the user at 2.5 
 | 2 | 200 k – 400 k | Random gusts 0–4.5 m/s | Learn to resist wind disturbance |
 | 3 | 400 k + | Walking user + gusts | Learn to track a moving target |
 
+### Parallel environments — why training is fast
+
+Sub-2 training uses **4 parallel PyBullet physics servers** (SubprocVecEnv, one per CPU core). Each collects experience simultaneously:
+
+| Environments | Steps/sec (typical) | 100k steps |
+|---|---|---|
+| 1 (old) | ~572 | ~3 min |
+| 4 (current) | ~1 800–2 400 | **~50 sec** |
+
+All 4 share the same policy network. The critic updates on the combined experience from all 4 environments, giving more diverse gradient estimates.
+
 ### How to train
 
 1. Click **Train PPO** on the Sub-2 card
-2. (Optional) Adjust timesteps — default 500 000 ≈ 8 min on CPU
-3. Click **Start Training**
-4. Watch the 3D hover arena:
-   - Stage 1: drone barely drifts, no wind arrows
-   - Stage 2: 6 orange wind arrows appear, drone sways more
-   - Stage 3: walking user (purple figure) appears, drone tracks it
-5. Watch the reward curve:
-   - Early: very negative (−500 to −1 500) — drone crashing and drifting
-   - After ~100 k steps: reward rises (−200 to 0) — basic hover emerging
-   - After ~400 k steps: reward positive — stable hover in wind
-6. Check the title bar: `PPO Reward · 38% done · ~5m left · 1024 steps/s`
-7. Check the trend indicator: `↑ improving` means learning is progressing
+2. Set timesteps — default 500 000 ≈ 4 min with 4 envs. For a quick test use **100 000** (~50 sec).
+3. Click **Start Training** (blue)
+4. Watch the 3D hover arena (auto-rotates):
+   - Stage 1: drone barely drifts — learning to fly up and stay still
+   - Stage 2: 6 orange wind arrows rotate inward — learning to resist gusts
+   - Stage 3: purple walking user appears — learning to track a moving target
+5. Watch the multi-run reward chart:
+   - The current run draws as a coloured line (each run gets a different colour)
+   - Previous runs stay on the chart as faded lines so you can see improvement across sessions
+   - A white moving-average line shows the smoothed trend
+   - Bottom-right indicator: `↑ improving` or `→ flat`
+   - Title bar: `Run 2 · 38% · ~2m left · 1924 steps/s`
+6. **Initial dip is normal:** When fine-tuning an existing model, reward temporarily drops before rising — this is the optimizer adjusting weights before settling on a better configuration
 
-### Warm-start (second run onwards)
+### Fine-tune vs Retrain from Scratch
 
-Every subsequent "Start Training" run automatically **loads the existing model and fine-tunes it** at a lower learning rate. You never lose prior learning. Each session adds improvement. Run 2–3 sessions of 500 k steps each to build a robust policy.
+Two buttons are available:
+
+| Button | Colour | What it does |
+|---|---|---|
+| **Start Training** / **Fine-tune (Run N)** | Blue | Loads existing model, trains at lower LR — adds incremental improvement |
+| **🔄 Retrain from Scratch** | Amber | Deletes model file, clears chart history, trains with random initial weights |
+
+Use fine-tune for regular improvement. Use Retrain from Scratch when the model is fundamentally stuck or you want a clean comparison baseline.
 
 ### How to verify it is working
 
-Click **Evaluate Model** in the Sub-2 tab after training:
+Click **Evaluate Model** (teal, bottom row) after training:
 
 | Result | Meaning |
 |---|---|
 | `PASS ✓ 4/5 episodes hovered` | Good — ready to launch |
-| `PASS ✓ 3/5 episodes hovered` | Acceptable — can launch, consider one more training run |
-| `FAIL ✗ 1/5` | Train for another 500 k steps |
-| Efficiency `≥ 60%` in status bar | Model is performing well |
-| Green trail in 3D arena | Best eval episode path — should stay near the hover ring |
+| `PASS ✓ 3/5 episodes hovered` | Acceptable — launch OK, one more run improves it |
+| `FAIL ✗ 1–2/5` | Fine-tune for another 100k steps |
+| Efficiency `≥ 60%` | Model is performing well |
+| Green trail in 3D arena | Best eval episode path — should circle near the green hover ring |
 
 **Passing threshold:** ≥ 3 of 5 episodes spend ≥ 30% of their time inside the 0.5 m hover zone.
 
@@ -203,20 +224,38 @@ The SAC nav agent learns to fly the drone from one side of a 10 × 8 m room to t
 
 The agent receives 12 observations per step (8 lidar ray fractions + 2D goal direction + 2D velocity) and outputs a 2D velocity setpoint. Reward is given for progress toward the goal, penalised for collisions and time. A +200 bonus on arrival reinforces goal-seeking.
 
+### Why SAC (not PPO)?
+
+SAC (Soft Actor-Critic) was chosen over PPO for obstacle navigation because:
+- **Off-policy replay buffer** — stores all past experience and relearns from it → ~3× more sample-efficient
+- **Automatic entropy tuning** — the agent self-regulates exploration vs exploitation without manual curriculum stages
+- Same SB3 interface, same environment, drop-in replacement
+
 ### How to train
 
 1. In the Sub-4 Nav Safety tab, set steps (default 150 000 ≈ 3 min)
 2. Click **Train Navigation** (teal button)
-3. Watch the 3D obstacle room:
-   - Blue drone sphere moves through the room
-   - Orange lidar rays extend from the drone, shortening near red pillars
-   - Blue trail traces the recent path
-4. Watch the reward curve: starts negative (collisions), should trend upward as the agent learns to navigate
-5. Status bar shows time remaining and steps/sec
+3. Watch the 3D obstacle room (auto-rotates):
+   - Blue drone sphere moves from the west end (blue arrow) toward the goal (green star, east end)
+   - **8 orange lidar rays** radiate from the drone — they shorten when pointing at a red pillar, showing active obstacle sensing
+   - Blue trail traces the recent drone positions
+   - Early training: drone crashes into pillars frequently (negative reward)
+   - After ~50k steps: drone begins routing around pillars (reward rising)
+4. Watch the teal reward curve — SAC typically converges faster than PPO because it reuses all past experience
+5. Status bar: `SAC training from scratch… ~3 min on CPU · off-policy replay buffer · auto-entropy exploration`
 
-### Warm-start (same as Sub-2)
+### ⚠ PPO/SAC incompatibility
 
-Each subsequent training run fine-tunes the existing model. Run 2–3 sessions to build a robust policy.
+If you have an old `ppo_nav_v1.zip` file trained with the previous PPO worker, the SAC loader will detect the mismatch automatically:
+- The incompatible file is **deleted automatically**
+- Training restarts from scratch with SAC
+- Status bar shows: `"⚠ Old PPO model was incompatible with SAC — deleted automatically"`
+
+To explicitly clear an old model, click **🔄 Retrain from Scratch** (amber button).
+
+### Fine-tune vs Retrain from Scratch
+
+Same as Sub-2: use **Train Navigation** to fine-tune from the existing SAC model, or **🔄 Retrain from Scratch** to delete and start over.
 
 ### How to verify it is working
 
