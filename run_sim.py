@@ -3,7 +3,7 @@ SkyShade — full integrated simulation runner.
 
 Starts a PyBullet GUI window and runs all four subsystems together:
   Sub-1  Perception       HSV tracker + distance estimator (camera feed)
-  Sub-2  Flight Control   PID hover controller
+  Sub-2  Flight Control   Q-learning hover policy with PID fallback
   Sub-3  Env Decision     SVM umbrella classifier
   Sub-4  Nav Safety       MDP policy table
 
@@ -66,14 +66,17 @@ WEATHER_MAX_SECONDS = 20.0
 DEBUG_WEATHER_LINES = False
 SCENARIO_PARK = "park"
 SCENARIO_FOREST = "forest"
-SCENARIO_CHOICES = (SCENARIO_PARK, SCENARIO_FOREST)
+SCENARIO_BUILDINGS = "buildings"
+SCENARIO_CHOICES = (SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS)
 SCENARIO_LABELS = {
     SCENARIO_PARK: "Park",
     SCENARIO_FOREST: "Forest Trail",
+    SCENARIO_BUILDINGS: "Building District",
 }
 SCENARIO_DESCRIPTIONS = {
     SCENARIO_PARK: "Open park loop with light obstacles and figure-8 walking.",
     SCENARIO_FOREST: "Long wooded trail with tree avoidance and path reset.",
+    SCENARIO_BUILDINGS: "City plaza with buildings, roads, vehicles, and pedestrians.",
 }
 AVOIDANCE_RADIUS = 0.75
 AVOIDANCE_GAIN = 4.5
@@ -83,10 +86,25 @@ GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
 USER_MARKER_HEIGHT = 1.62
 POV_DISPLAY_SIZE = (960, 540)
+TRAINING_DISPLAY_SIZE = (360, 270)
+LAUNCHER_TRAINING_DISPLAY_SIZE = (480, 360)
+TRAINING_PIXEL_PASS = 18.0
+TRAINING_GROUND_ITEMS = (
+    ("camera", "Sub-1 Camera", "HSV tracker", "Live red-marker lock check.", "#22c55e"),
+    ("flight", "Sub-2 Flight", "Q-learning", "Hover policy trainer slot.", "#60a5fa"),
+    ("weather", "Sub-3 Weather", "SVM", "Umbrella classifier slot.", "#f472b6"),
+    ("safety", "Sub-4 Safety", "MDP", "Battery and navigation policy slot.", "#f59e0b"),
+    ("environment", "Environment", "Scenarios", "Park, forest, and buildings tests.", "#a78bfa"),
+)
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
 FOREST_WALK_SPEED = 0.65
+BUILDING_RING_MIN = 7.5
+BUILDING_RING_MAX = 12.5
+ROAD_HALF_WIDTH = 1.1
+RING_ROAD_R = 6.2
+HUMAN_STAND_Z = 0.62
 
 
 def figure8(t, scale=1.5):
@@ -319,6 +337,393 @@ def _rotate_xy(offset, yaw):
     return np.array([c * x - s * y, s * x + c * y, z], dtype=float)
 
 
+def _fixed_links(phys, base_mass, base_col, base_vis, base_pos, base_orn,
+                 link_vis, link_pos, link_orn):
+    """Create a rigid visual assembly from fixed PyBullet links."""
+    n = len(link_vis)
+    return p.createMultiBody(
+        baseMass=base_mass,
+        baseCollisionShapeIndex=base_col,
+        baseVisualShapeIndex=base_vis,
+        basePosition=list(base_pos),
+        baseOrientation=base_orn,
+        linkMasses=[0.0] * n,
+        linkCollisionShapeIndices=[-1] * n,
+        linkVisualShapeIndices=link_vis,
+        linkPositions=link_pos,
+        linkOrientations=link_orn,
+        linkParentIndices=[0] * n,
+        linkJointTypes=[p.JOINT_FIXED] * n,
+        linkJointAxis=[[0, 0, 1]] * n,
+        linkInertialFramePositions=[[0, 0, 0]] * n,
+        linkInertialFrameOrientations=[[0, 0, 0, 1]] * n,
+        physicsClientId=phys,
+    )
+
+
+def _flat(phys, half_extents, color, x, y, z, yaw=0.0):
+    """Thin visual-only slab for roads, sidewalks, lawns, and lane markings."""
+    vis = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=half_extents,
+        rgbaColor=list(color) + [1.0],
+        physicsClientId=phys,
+    )
+    return p.createMultiBody(
+        baseMass=0,
+        baseCollisionShapeIndex=-1,
+        baseVisualShapeIndex=vis,
+        basePosition=[x, y, z],
+        baseOrientation=p.getQuaternionFromEuler([0, 0, yaw]),
+        physicsClientId=phys,
+    )
+
+
+def make_city_car(phys, pos, yaw, color):
+    body = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=[0.34, 0.16, 0.10],
+        rgbaColor=list(color) + [1.0],
+        specularColor=[0.3, 0.3, 0.3],
+        physicsClientId=phys,
+    )
+    cabin = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=[0.17, 0.14, 0.085],
+        rgbaColor=[0.6, 0.8, 0.92, 0.7],
+        physicsClientId=phys,
+    )
+
+    def wheel():
+        return p.createVisualShape(
+            p.GEOM_CYLINDER,
+            radius=0.08,
+            length=0.05,
+            rgbaColor=[0.05, 0.05, 0.06, 1.0],
+            physicsClientId=phys,
+        )
+
+    wheel_orn = p.getQuaternionFromEuler([math.pi / 2, 0, 0])
+    link_vis = [cabin, wheel(), wheel(), wheel(), wheel()]
+    link_pos = [
+        [-0.02, 0, 0.13],
+        [0.22, 0.17, -0.03],
+        [0.22, -0.17, -0.03],
+        [-0.22, 0.17, -0.03],
+        [-0.22, -0.17, -0.03],
+    ]
+    link_orn = [[0, 0, 0, 1], wheel_orn, wheel_orn, wheel_orn, wheel_orn]
+    return _fixed_links(
+        phys,
+        0.0,
+        -1,
+        body,
+        [pos[0], pos[1], 0.14],
+        p.getQuaternionFromEuler([0, 0, yaw]),
+        link_vis,
+        link_pos,
+        link_orn,
+    )
+
+
+def make_city_bus(phys, pos, yaw, color):
+    body = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=[0.66, 0.20, 0.18],
+        rgbaColor=list(color) + [1.0],
+        specularColor=[0.3, 0.3, 0.3],
+        physicsClientId=phys,
+    )
+    windows = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=[0.60, 0.205, 0.055],
+        rgbaColor=[0.55, 0.72, 0.88, 0.85],
+        physicsClientId=phys,
+    )
+
+    def wheel():
+        return p.createVisualShape(
+            p.GEOM_CYLINDER,
+            radius=0.10,
+            length=0.06,
+            rgbaColor=[0.05, 0.05, 0.06, 1.0],
+            physicsClientId=phys,
+        )
+
+    wheel_orn = p.getQuaternionFromEuler([math.pi / 2, 0, 0])
+    link_vis = [windows, wheel(), wheel(), wheel(), wheel()]
+    link_pos = [
+        [0, 0, 0.07],
+        [0.44, 0.21, -0.10],
+        [0.44, -0.21, -0.10],
+        [-0.44, 0.21, -0.10],
+        [-0.44, -0.21, -0.10],
+    ]
+    link_orn = [[0, 0, 0, 1], wheel_orn, wheel_orn, wheel_orn, wheel_orn]
+    return _fixed_links(
+        phys,
+        0.0,
+        -1,
+        body,
+        [pos[0], pos[1], 0.22],
+        p.getQuaternionFromEuler([0, 0, yaw]),
+        link_vis,
+        link_pos,
+        link_orn,
+    )
+
+
+def make_city_tree(phys, x, y, scale=1.0):
+    trunk = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=0.08 * scale,
+        length=0.9 * scale,
+        rgbaColor=[0.40, 0.26, 0.13, 1.0],
+        physicsClientId=phys,
+    )
+    canopy_1 = p.createVisualShape(
+        p.GEOM_SPHERE,
+        radius=0.42 * scale,
+        rgbaColor=[0.16, 0.45, 0.18, 1.0],
+        physicsClientId=phys,
+    )
+    canopy_2 = p.createVisualShape(
+        p.GEOM_SPHERE,
+        radius=0.30 * scale,
+        rgbaColor=[0.22, 0.55, 0.24, 1.0],
+        physicsClientId=phys,
+    )
+    return _fixed_links(
+        phys,
+        0.0,
+        -1,
+        trunk,
+        [x, y, 0.45 * scale],
+        [0, 0, 0, 1],
+        [canopy_1, canopy_2],
+        [[0, 0, 0.62 * scale], [0.16 * scale, 0.10 * scale, 0.80 * scale]],
+        [[0, 0, 0, 1], [0, 0, 0, 1]],
+    )
+
+
+def make_city_pedestrian(phys, pos, shirt, pants=(0.16, 0.20, 0.42),
+                         skin=(0.95, 0.78, 0.66), scale=1.0):
+    """Non-red pedestrian so the perception tracker stays locked to the user."""
+    torso = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=[0.13 * scale, 0.07 * scale, 0.20 * scale],
+        rgbaColor=list(shirt) + [1.0],
+        physicsClientId=phys,
+    )
+    head = p.createVisualShape(
+        p.GEOM_SPHERE,
+        radius=0.11 * scale,
+        rgbaColor=list(skin) + [1.0],
+        physicsClientId=phys,
+    )
+    cap = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=0.135 * scale,
+        length=0.06 * scale,
+        rgbaColor=list(shirt) + [1.0],
+        physicsClientId=phys,
+    )
+    arm_l = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=0.035 * scale,
+        length=0.34 * scale,
+        rgbaColor=list(shirt) + [1.0],
+        physicsClientId=phys,
+    )
+    arm_r = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=0.035 * scale,
+        length=0.34 * scale,
+        rgbaColor=list(shirt) + [1.0],
+        physicsClientId=phys,
+    )
+    leg_l = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=0.05 * scale,
+        length=0.42 * scale,
+        rgbaColor=list(pants) + [1.0],
+        physicsClientId=phys,
+    )
+    leg_r = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=0.05 * scale,
+        length=0.42 * scale,
+        rgbaColor=list(pants) + [1.0],
+        physicsClientId=phys,
+    )
+    return _fixed_links(
+        phys,
+        0.0,
+        -1,
+        torso,
+        pos,
+        [0, 0, 0, 1],
+        [head, cap, arm_l, arm_r, leg_l, leg_r],
+        [
+            [0, 0, 0.31 * scale],
+            [0, 0, 0.44 * scale],
+            [-0.165 * scale, 0, 0.02 * scale],
+            [0.165 * scale, 0, 0.02 * scale],
+            [-0.06 * scale, 0, -0.41 * scale],
+            [0.06 * scale, 0, -0.41 * scale],
+        ],
+        [[0, 0, 0, 1]] * 6,
+    )
+
+
+def spawn_buildings(phys, rng, n=12):
+    """Spawn solid buildings around the clear central flight plaza."""
+    palette = [
+        [0.30, 0.34, 0.42],
+        [0.24, 0.28, 0.36],
+        [0.38, 0.40, 0.47],
+        [0.22, 0.30, 0.41],
+        [0.34, 0.30, 0.39],
+        [0.28, 0.33, 0.38],
+    ]
+    obstacles = []
+    for k in range(n):
+        angle = 2 * math.pi * k / n + float(rng.uniform(-0.12, 0.12))
+        radius = float(rng.uniform(BUILDING_RING_MIN, BUILDING_RING_MAX))
+        x, y = radius * math.cos(angle), radius * math.sin(angle)
+        width = float(rng.uniform(0.45, 0.85))
+        depth = float(rng.uniform(0.45, 0.85))
+        height = float(rng.uniform(2.0, 6.0))
+        color = palette[k % len(palette)] + [1.0]
+        half = [width, depth, height / 2.0]
+
+        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
+        vis = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=half,
+            rgbaColor=color,
+            specularColor=[0.25, 0.27, 0.33],
+            physicsClientId=phys,
+        )
+        p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=col,
+            baseVisualShapeIndex=vis,
+            basePosition=[x, y, height / 2.0],
+            physicsClientId=phys,
+        )
+
+        for band_z in range(2, int(height) + 1):
+            z = float(band_z) - 0.5
+            if z > height - 0.25:
+                break
+            band = p.createVisualShape(
+                p.GEOM_BOX,
+                halfExtents=[width + 0.015, depth + 0.015, 0.09],
+                rgbaColor=[1.0, 0.91, 0.55, 1.0],
+                physicsClientId=phys,
+            )
+            p.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=-1,
+                baseVisualShapeIndex=band,
+                basePosition=[x, y, z],
+                physicsClientId=phys,
+            )
+
+        obstacles.append({
+            "position": np.array([x, y], dtype=float),
+            "radius": max(width, depth) + 0.35,
+        })
+
+    return obstacles
+
+
+def spawn_city_props(phys, rng):
+    """Road network, parks, vehicles, and pedestrians around the city plaza."""
+    radius = RING_ROAD_R
+    road = (0.13, 0.13, 0.15)
+    sidewalk = (0.62, 0.63, 0.66)
+    grass = (0.18, 0.42, 0.20)
+    plaza_radius = 2.3
+
+    for quadrant in range(4):
+        angle = math.pi / 4 + quadrant * math.pi / 2
+        gx, gy = 8.4 * math.cos(angle), 8.4 * math.sin(angle)
+        _flat(phys, [2.4, 2.4, 0.006], grass, gx, gy, 0.006, angle)
+        for _ in range(4):
+            tx = gx + float(rng.uniform(-1.7, 1.7))
+            ty = gy + float(rng.uniform(-1.7, 1.7))
+            make_city_tree(phys, tx, ty, scale=float(rng.uniform(0.85, 1.2)))
+
+    segments = 30
+    for k in range(segments):
+        angle = 2 * math.pi * k / segments
+        x, y = radius * math.cos(angle), radius * math.sin(angle)
+        segment_len = (2 * math.pi * radius / segments) * 0.62
+        yaw = angle + math.pi / 2
+        _flat(phys, [segment_len, ROAD_HALF_WIDTH, 0.012], road, x, y, 0.012, yaw)
+        if k % 2 == 0:
+            _flat(phys, [0.22, 0.035, 0.004], (0.92, 0.82, 0.25), x, y, 0.026, yaw)
+
+    for direction in range(4):
+        angle = direction * math.pi / 2
+        mid = (plaza_radius + radius) / 2.0
+        length = (radius - plaza_radius) / 2.0
+        cx, cy = mid * math.cos(angle), mid * math.sin(angle)
+        _flat(phys, [length, ROAD_HALF_WIDTH, 0.012], road, cx, cy, 0.012, angle)
+
+        sidewalk_offset = ROAD_HALF_WIDTH + 0.22
+        for side in (1, -1):
+            sx = cx + sidewalk_offset * math.cos(angle + math.pi / 2) * side
+            sy = cy + sidewalk_offset * math.sin(angle + math.pi / 2) * side
+            _flat(phys, [length, 0.20, 0.02], sidewalk, sx, sy, 0.02, angle)
+
+        for t in (-0.5, 0.0, 0.5):
+            dx = (mid + t * length) * math.cos(angle)
+            dy = (mid + t * length) * math.sin(angle)
+            _flat(phys, [0.22, 0.035, 0.004], (0.92, 0.82, 0.25), dx, dy, 0.026, angle)
+
+        for stripe in range(-3, 4):
+            wx = plaza_radius * math.cos(angle) + 0.13 * stripe * math.cos(angle + math.pi / 2)
+            wy = plaza_radius * math.sin(angle) + 0.13 * stripe * math.sin(angle + math.pi / 2)
+            _flat(phys, [0.22, 0.05, 0.004], (0.9, 0.9, 0.92), wx, wy, 0.022, angle)
+
+    car_colors = [
+        (0.20, 0.40, 0.85),
+        (0.85, 0.72, 0.20),
+        (0.20, 0.62, 0.52),
+        (0.72, 0.74, 0.78),
+        (0.30, 0.30, 0.36),
+        (0.55, 0.40, 0.70),
+    ]
+    for index, color in enumerate(car_colors):
+        angle = 2 * math.pi * index / len(car_colors) + 0.25
+        make_city_car(phys, [radius * math.cos(angle), radius * math.sin(angle)], angle + math.pi / 2, color)
+
+    for direction, color in ((0, (0.85, 0.55, 0.15)), (2, (0.20, 0.50, 0.75))):
+        angle = direction * math.pi / 2
+        bus_radius = (plaza_radius + radius) / 2.0
+        make_city_bus(phys, [bus_radius * math.cos(angle), bus_radius * math.sin(angle)], angle, color)
+
+    ped_colors = [
+        (0.20, 0.30, 0.72),
+        (0.20, 0.60, 0.32),
+        (0.25, 0.55, 0.62),
+        (0.52, 0.52, 0.57),
+        (0.62, 0.56, 0.22),
+        (0.30, 0.45, 0.55),
+    ]
+    for index, color in enumerate(ped_colors):
+        angle = math.pi / 5 + 2 * math.pi * index / len(ped_colors)
+        ped_radius = 3.4 + float(rng.uniform(-0.3, 1.2))
+        make_city_pedestrian(
+            phys,
+            [ped_radius * math.cos(angle), ped_radius * math.sin(angle), HUMAN_STAND_Z],
+            shirt=color,
+        )
+
+
 def _tree(phys, x, y, trunk_radius=0.11, trunk_height=1.8, crown_radius=0.48):
     trunk = _static_cylinder(
         phys, trunk_radius, trunk_height, [x, y, trunk_height / 2.0],
@@ -412,9 +817,27 @@ def build_forest_environment(phys):
     return obstacles
 
 
+def build_building_environment(phys):
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.34, 0.37, 0.39, 1], physicsClientId=phys)
+
+    # Keep the centre clear for the follower, then wrap it with the city scene.
+    _flat(phys, [2.25, 2.25, 0.008], (0.29, 0.32, 0.34), 0, 0, 0.018, 0.0)
+    _flat(phys, [1.80, 0.06, 0.006], (0.86, 0.86, 0.80), 0, 0, 0.03, 0.0)
+    _flat(phys, [0.06, 1.80, 0.006], (0.86, 0.86, 0.80), 0, 0, 0.031, 0.0)
+
+    rng_buildings = np.random.default_rng(7)
+    rng_props = np.random.default_rng(13)
+    obstacles = spawn_buildings(phys, rng_buildings, n=14)
+    spawn_city_props(phys, rng_props)
+    return obstacles
+
+
 def build_environment(phys, scenario):
     if scenario == SCENARIO_FOREST:
         return build_forest_environment(phys)
+    if scenario == SCENARIO_BUILDINGS:
+        return build_building_environment(phys)
     return build_park_environment(phys)
 
 
@@ -576,21 +999,260 @@ def update_person(phys, person, user_pos, yaw, walk_phase):
         )
 
 
+def launcher_photo_from_frame(frame, size):
+    display = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+    header = f"P6 {display.shape[1]} {display.shape[0]} 255\n".encode("ascii")
+    return tk.PhotoImage(data=header + display.tobytes(), format="PPM")
+
+
+def camera_training_frame(t_wall):
+    width, height = CAMERA_RES
+    frame = np.zeros((height, width, 3), dtype=np.uint8)
+
+    frame[:, :] = (10, 18, 31)
+    cv2.rectangle(frame, (0, height // 2), (width, height), (19, 35, 49), -1)
+    cv2.rectangle(frame, (0, 0), (width, 54), (15, 23, 38), -1)
+
+    horizon = height // 2
+    for x in range(-120, width + 120, 80):
+        cv2.line(frame, (x, height), (width // 2, horizon), (32, 63, 82), 1)
+    for y in range(horizon + 35, height, 46):
+        cv2.line(frame, (0, y), (width, y), (28, 56, 75), 1)
+
+    for x, y, w, h, color in [
+        (24, 72, 92, 182, (35, 48, 63)),
+        (500, 82, 78, 168, (38, 50, 68)),
+        (436, 126, 44, 102, (49, 64, 82)),
+    ]:
+        cv2.rectangle(frame, (x, y), (x + w, y + h), color, -1)
+        for wy in range(y + 18, y + h - 10, 28):
+            cv2.rectangle(frame, (x + 12, wy), (x + w - 12, wy + 7), (174, 196, 208), -1)
+
+    marker_cx = int(width / 2 + math.sin(t_wall * 0.95) * 150)
+    marker_cy = int(height / 2 + math.cos(t_wall * 1.18) * 58)
+    radius = int(24 + 5 * math.sin(t_wall * 0.7))
+
+    cv2.circle(frame, (150, 322), 18, (58, 105, 216), -1)
+    cv2.circle(frame, (498, 328), 20, (66, 190, 116), -1)
+    cv2.circle(frame, (marker_cx, marker_cy + radius + 24), 17, (198, 139, 86), -1)
+    cv2.line(
+        frame, (marker_cx, marker_cy + radius + 42),
+        (marker_cx - 22, marker_cy + radius + 82),
+        (51, 92, 173), 6,
+    )
+    cv2.line(
+        frame, (marker_cx, marker_cy + radius + 42),
+        (marker_cx + 23, marker_cy + radius + 82),
+        (51, 92, 173), 6,
+    )
+
+    cv2.circle(frame, (marker_cx, marker_cy), radius, (230, 24, 34), -1)
+    cv2.circle(
+        frame,
+        (marker_cx - radius // 3, marker_cy - radius // 3),
+        max(4, radius // 5),
+        (255, 100, 108),
+        -1,
+    )
+
+    return frame, (marker_cx, marker_cy)
+
+
+def camera_training_marker_box(frame):
+    hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+    mask1 = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
+    mask2 = cv2.inRange(hsv, HSV_LOWER2, HSV_UPPER2)
+    mask = cv2.bitwise_or(mask1, mask2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    largest = max(contours, key=cv2.contourArea)
+    area = cv2.contourArea(largest)
+    if area < MIN_CONTOUR_AREA:
+        return None
+
+    x, y, w, h = cv2.boundingRect(largest)
+    return x, y, w, h, area
+
+
+def camera_training_step(tracker, t_wall):
+    frame, expected = camera_training_frame(t_wall)
+    pos, confidence = tracker.process_frame(frame)
+    overlay = frame.copy()
+
+    box = camera_training_marker_box(frame)
+    pixel_error = float("inf")
+    if box is not None:
+        x, y, w, h, area = box
+        detected = (x + w // 2, y + h // 2)
+        pixel_error = float(np.hypot(detected[0] - expected[0], detected[1] - expected[1]))
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 80), 3)
+        cv2.drawMarker(
+            overlay, detected, (255, 255, 255),
+            markerType=cv2.MARKER_CROSS, markerSize=18, thickness=2,
+        )
+        cv2.putText(
+            overlay, f"detected {pixel_error:.1f}px",
+            (max(8, x), max(26, y - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 80), 2,
+        )
+    else:
+        cv2.putText(
+            overlay, "searching",
+            (18, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 90, 90), 2,
+        )
+
+    cv2.circle(overlay, expected, 7, (255, 255, 255), 2)
+    cv2.putText(
+        overlay, "expected",
+        (expected[0] + 10, max(22, expected[1] - 12)),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (226, 232, 240), 1,
+    )
+
+    passing = confidence >= CONFIDENCE_THRESH and pixel_error <= TRAINING_PIXEL_PASS
+    return overlay, confidence, pixel_error, pos, passing
+
+
+class CameraTrainingWindow:
+    def __init__(self, parent):
+        self.window = tk.Toplevel(parent)
+        self.window.title("Training Ground - Sub-1 Camera")
+        self.window.configure(bg="#07111f")
+        self.window.geometry("860x520+120+120")
+        self.window.minsize(760, 460)
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+        self.tracker = Tracker(DistanceEstimator())
+        self.start_t = time.time()
+        self.closed = False
+        self.image = None
+
+        container = tk.Frame(self.window, bg="#07111f", padx=16, pady=16)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.grid_columnconfigure(0, weight=0)
+        container.grid_columnconfigure(1, weight=1)
+        self.window.grid_rowconfigure(0, weight=1)
+        self.window.grid_columnconfigure(0, weight=1)
+
+        preview = tk.Frame(
+            container,
+            width=LAUNCHER_TRAINING_DISPLAY_SIZE[0],
+            height=LAUNCHER_TRAINING_DISPLAY_SIZE[1],
+            bg="#020617",
+            highlightthickness=1,
+            highlightbackground="#1f3a5f",
+        )
+        preview.grid(row=0, column=0, sticky="nw", padx=(0, 16))
+        preview.grid_propagate(False)
+
+        self.image_label = tk.Label(
+            preview,
+            bg="#020617",
+            fg="#94a3b8",
+            text="Starting camera trainer...",
+            font=("Arial", 11, "bold"),
+        )
+        self.image_label.place(x=0, y=0, relwidth=1, relheight=1)
+
+        info = tk.Frame(container, bg="#07111f")
+        info.grid(row=0, column=1, sticky="nsew")
+        info.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            info,
+            text="Sub-1 Camera",
+            fg="#38bdf8", bg="#07111f",
+            font=("Arial", 11, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        self.status_var = tk.StringVar(value="Camera trainer warming up")
+        tk.Label(
+            info,
+            textvariable=self.status_var,
+            fg="#f8fafc", bg="#0f172a",
+            font=("Arial", 15, "bold"),
+            anchor="w",
+            padx=12, pady=12,
+            wraplength=300,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+
+        self.detail_var = tk.StringVar(value="HSV tracker live check")
+        tk.Label(
+            info,
+            textvariable=self.detail_var,
+            fg="#cbd5e1", bg="#111c2e",
+            font=("Arial", 10),
+            anchor="nw",
+            padx=12, pady=12,
+            wraplength=300,
+            justify="left",
+        ).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+        tk.Button(
+            info,
+            text="Close",
+            command=self.close,
+            bg="#1e293b",
+            fg="#cbd5e1",
+            activebackground="#334155",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("Arial", 11, "bold"),
+            padx=12,
+            pady=10,
+        ).grid(row=3, column=0, sticky="ew", pady=(18, 0))
+
+        self._tick()
+
+    def _tick(self):
+        if self.closed:
+            return
+
+        t_wall = time.time() - self.start_t
+        overlay, confidence, pixel_error, pos, passing = camera_training_step(self.tracker, t_wall)
+        err_text = f"{pixel_error:.1f}px" if math.isfinite(pixel_error) else "no lock"
+        verdict = "LOCKED" if passing else "SEARCHING"
+        self.status_var.set(f"{verdict}: confidence {confidence:.2f}, error {err_text}")
+        self.detail_var.set(
+            "Same Sub-1 tracker as the main sim. White circle is the expected marker centre; "
+            "green box is what the algorithm detected. "
+            f"Estimated body offset: dx {pos[0]:+.2f} m, dy {pos[1]:+.2f} m, dz {pos[2]:.2f} m."
+        )
+        self.image = launcher_photo_from_frame(overlay, LAUNCHER_TRAINING_DISPLAY_SIZE)
+        self.image_label.configure(image=self.image, text="")
+        self.window.after(80, self._tick)
+
+    def close(self):
+        self.closed = True
+        try:
+            self.window.destroy()
+        except tk.TclError:
+            pass
+
+
 class ScenarioLauncher:
     def __init__(self, default_duration=120.0):
         self.selection = None
         self.default_duration = default_duration
+        self.scenario_cards = {}
+        self.training_status_var = None
+        self.training_window = None
 
         self.root = tk.Tk()
         self.root.title("SkyShade Launcher")
         self.root.configure(bg="#0b1120")
-        self.root.geometry("760x560")
-        self.root.minsize(680, 460)
+        self.root.geometry("1180x760")
+        self.root.minsize(1040, 680)
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
 
         self.scenario_var = tk.StringVar(value=SCENARIO_PARK)
-        self.flight_var = tk.StringVar(value="pid")
+        self.flight_var = tk.StringVar(value="q")
         self.duration_var = tk.StringVar(value=str(int(default_duration)))
         self.gui_var = tk.BooleanVar(value=True)
         self.error_var = tk.StringVar(value="")
@@ -598,121 +1260,191 @@ class ScenarioLauncher:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
-        frame = tk.Frame(self.root, bg="#0b1120", padx=28, pady=24)
+        frame = tk.Frame(self.root, bg="#0b1120", padx=24, pady=22)
         frame.grid(row=0, column=0, sticky="nsew")
         frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(7, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+
+        hero = tk.Canvas(
+            frame,
+            height=150,
+            bg="#08111f",
+            highlightthickness=0,
+        )
+        hero.grid(row=0, column=0, sticky="ew")
+        self._draw_launcher_hero(hero)
+
+        content = tk.Frame(frame, bg="#0b1120")
+        content.grid(row=1, column=0, sticky="nsew", pady=(18, 0))
+        content.grid_columnconfigure(0, weight=4, uniform="launcher_columns")
+        content.grid_columnconfigure(1, weight=5, uniform="launcher_columns")
+        content.grid_rowconfigure(0, weight=1)
+
+        training_panel = tk.Frame(content, bg="#0b1120")
+        training_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
+        training_panel.grid_columnconfigure(0, weight=1)
+        self._build_launcher_training_ground(training_panel, 0, base_bg="#0b1120", columns=1)
+
+        right_panel = tk.Frame(content, bg="#0b1120")
+        right_panel.grid(row=0, column=1, sticky="nsew")
+        right_panel.grid_columnconfigure(0, weight=1)
+        right_panel.grid_rowconfigure(1, weight=1)
+
+        scenario_panel = tk.Frame(right_panel, bg="#0b1120")
+        scenario_panel.grid(row=0, column=0, sticky="ew")
+        scenario_panel.grid_columnconfigure(0, weight=1)
+
+        settings_panel = tk.Frame(
+            right_panel,
+            bg="#101827",
+            padx=16,
+            pady=16,
+            highlightthickness=1,
+            highlightbackground="#26364f",
+        )
+        settings_panel.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        settings_panel.grid_columnconfigure(0, weight=1)
 
         tk.Label(
-            frame,
-            text="SkyShade Simulation",
+            scenario_panel,
+            text="Scenario",
             fg="#f8fafc",
             bg="#0b1120",
-            font=("Arial", 26, "bold"),
+            font=("Arial", 18, "bold"),
             anchor="w",
         ).grid(row=0, column=0, sticky="ew")
 
         tk.Label(
-            frame,
-            text="Choose a scenario to launch.",
-            fg="#94a3b8",
+            scenario_panel,
+            text="Pick the world SkyShade should fly through.",
+            fg="#aab8cf",
             bg="#0b1120",
-            font=("Arial", 12),
+            font=("Arial", 11),
             anchor="w",
-        ).grid(row=1, column=0, sticky="ew", pady=(2, 16))
+        ).grid(row=1, column=0, sticky="ew", pady=(2, 12))
 
         for row, scenario in enumerate(SCENARIO_CHOICES, start=2):
-            self._scenario_button(frame, row, scenario)
-
-        options = tk.Frame(frame, bg="#111c2e", padx=12, pady=12)
-        options.grid(row=4, column=0, sticky="ew", pady=(16, 0))
-        options.grid_columnconfigure(1, weight=1)
+            self._scenario_card(scenario_panel, row, scenario)
 
         tk.Label(
-            options,
+            settings_panel,
+            text="Mission Setup",
+            fg="#f8fafc",
+            bg="#101827",
+            font=("Arial", 18, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        tk.Label(
+            settings_panel,
+            text="Runtime",
+            fg="#38bdf8",
+            bg="#101827",
+            font=("Arial", 10, "bold"),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(18, 5))
+
+        duration_row = tk.Frame(settings_panel, bg="#101827")
+        duration_row.grid(row=2, column=0, sticky="ew")
+        duration_row.grid_columnconfigure(1, weight=1)
+        tk.Label(
+            duration_row,
             text="Duration",
             fg="#cbd5e1",
-            bg="#111c2e",
+            bg="#101827",
             font=("Arial", 10, "bold"),
             anchor="w",
         ).grid(row=0, column=0, sticky="w", padx=(0, 10))
 
         duration_entry = tk.Entry(
-            options,
+            duration_row,
             textvariable=self.duration_var,
             bg="#020617",
             fg="#f8fafc",
             insertbackground="#f8fafc",
             relief="flat",
-            font=("Arial", 11),
+            font=("Arial", 13, "bold"),
             width=8,
+            justify="center",
         )
         duration_entry.grid(row=0, column=1, sticky="w")
 
         tk.Label(
-            options,
+            duration_row,
             text="seconds",
             fg="#94a3b8",
-            bg="#111c2e",
+            bg="#101827",
             font=("Arial", 10),
             anchor="w",
         ).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
         tk.Label(
-            options,
-            text="Flight",
-            fg="#cbd5e1",
-            bg="#111c2e",
+            settings_panel,
+            text="Flight Control",
+            fg="#38bdf8",
+            bg="#101827",
             font=("Arial", 10, "bold"),
             anchor="w",
-        ).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(10, 0))
+        ).grid(row=3, column=0, sticky="ew", pady=(18, 5))
 
-        flight_row = tk.Frame(options, bg="#111c2e")
-        flight_row.grid(row=1, column=1, columnspan=2, sticky="w", pady=(10, 0))
-        for col, (value, label) in enumerate((("pid", "PID"), ("q", "Q-learning"))):
-            tk.Radiobutton(
-                flight_row,
-                text=label,
-                value=value,
-                variable=self.flight_var,
-                indicatoron=False,
-                bg="#0f172a",
-                fg="#f8fafc",
-                selectcolor="#075985",
-                activebackground="#1e293b",
-                activeforeground="#ffffff",
-                relief="flat",
-                font=("Arial", 10, "bold"),
-                padx=10,
-                pady=6,
-            ).grid(row=0, column=col, sticky="w", padx=(0, 8))
-
-        tk.Checkbutton(
-            options,
-            text="Show PyBullet GUI and dashboard",
-            variable=self.gui_var,
-            bg="#111c2e",
-            fg="#cbd5e1",
-            selectcolor="#020617",
-            activebackground="#111c2e",
-            activeforeground="#f8fafc",
+        flight_card = tk.Frame(
+            settings_panel,
+            bg="#0f172a",
+            padx=12,
+            pady=10,
+            highlightthickness=1,
+            highlightbackground="#2563eb",
+        )
+        flight_card.grid(row=4, column=0, sticky="ew")
+        flight_card.grid_columnconfigure(0, weight=1)
+        tk.Label(
+            flight_card,
+            text="Q-learning active",
+            fg="#f8fafc",
+            bg="#0f172a",
+            font=("Arial", 12, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+        tk.Label(
+            flight_card,
+            text="Sub-2 learned policy from qtable_v1.npy with velocity-aware state buckets.",
+            fg="#bfdbfe",
+            bg="#0f172a",
             font=("Arial", 10),
             anchor="w",
-        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
+            justify="left",
+            wraplength=520,
+        ).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+
+        tk.Checkbutton(
+            settings_panel,
+            text="Show PyBullet GUI and dashboard",
+            variable=self.gui_var,
+            bg="#101827",
+            fg="#cbd5e1",
+            selectcolor="#020617",
+            activebackground="#101827",
+            activeforeground="#f8fafc",
+            font=("Arial", 11),
+            anchor="w",
+        ).grid(row=5, column=0, sticky="w", pady=(18, 0))
 
         tk.Label(
-            frame,
+            settings_panel,
             textvariable=self.error_var,
             fg="#fecaca",
-            bg="#0b1120",
+            bg="#101827",
             font=("Arial", 10, "bold"),
             anchor="w",
-        ).grid(row=5, column=0, sticky="ew", pady=(8, 0))
+            wraplength=300,
+            justify="left",
+        ).grid(row=6, column=0, sticky="ew", pady=(16, 0))
 
-        actions = tk.Frame(frame, bg="#0b1120")
-        actions.grid(row=6, column=0, sticky="ew", pady=(16, 0))
+        actions = tk.Frame(settings_panel, bg="#101827")
+        actions.grid(row=7, column=0, sticky="sew", pady=(24, 0))
         actions.grid_columnconfigure(0, weight=1)
         actions.grid_columnconfigure(1, weight=1)
+        settings_panel.grid_rowconfigure(7, weight=1)
 
         tk.Button(
             actions,
@@ -723,9 +1455,9 @@ class ScenarioLauncher:
             activebackground="#1d4ed8",
             activeforeground="#ffffff",
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=("Arial", 13, "bold"),
             padx=14,
-            pady=10,
+            pady=12,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
 
         tk.Button(
@@ -737,46 +1469,333 @@ class ScenarioLauncher:
             activebackground="#334155",
             activeforeground="#ffffff",
             relief="flat",
-            font=("Arial", 12, "bold"),
+            font=("Arial", 13, "bold"),
             padx=14,
-            pady=10,
+            pady=12,
         ).grid(row=0, column=1, sticky="ew")
 
-    def _scenario_button(self, parent, row, scenario):
-        shell = tk.Frame(parent, bg="#111c2e", padx=10, pady=10)
-        shell.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+        self.scenario_var.trace_add("write", lambda *_: self._refresh_scenario_cards())
+        self._refresh_scenario_cards()
+
+    def _build_launcher_training_ground(self, parent, row, base_bg="#0b1120", columns=2):
+        panel = tk.Frame(parent, bg=base_bg)
+        panel.grid(row=row, column=0, sticky="nsew")
+        panel.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(row, weight=1)
+
+        header = tk.Frame(panel, bg=base_bg)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            header,
+            text="Training Ground",
+            fg="#f8fafc",
+            bg=base_bg,
+            font=("Arial", 20, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        tk.Button(
+            header,
+            text="Open Camera",
+            command=lambda: self._open_training_ground("camera"),
+            bg="#2563eb",
+            fg="#eff6ff",
+            activebackground="#1d4ed8",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("Arial", 10, "bold"),
+            padx=10,
+            pady=6,
+        ).grid(row=0, column=1, sticky="e")
+
+        tk.Label(
+            panel,
+            text="Subsystem trainers and validation surfaces.",
+            fg="#aab8cf",
+            bg=base_bg,
+            font=("Arial", 11),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(2, 8))
+
+        grid = tk.Frame(panel, bg=base_bg)
+        grid.grid(row=2, column=0, sticky="ew")
+        for col in range(columns):
+            grid.grid_columnconfigure(col, weight=1, uniform="training_cards")
+
+        for index, item in enumerate(TRAINING_GROUND_ITEMS):
+            self._training_ground_card(
+                grid,
+                index // columns,
+                index % columns,
+                item,
+                compact=columns > 1,
+            )
+
+        self.training_status_var = tk.StringVar(
+            value="Camera trainer is ready here. Press Open Camera to see the live Sub-1 lock check."
+        )
+        tk.Label(
+            panel,
+            textvariable=self.training_status_var,
+            fg="#cbd5e1",
+            bg="#111c2e",
+            font=("Arial", 10),
+            anchor="w",
+            justify="left",
+            wraplength=420 if columns == 1 else 690,
+            padx=10,
+            pady=8,
+        ).grid(row=3, column=0, sticky="ew", pady=(8, 0))
+
+    def _training_ground_card(self, parent, row, col, item, compact=False):
+        key, title, tag, description, accent = item
+        card = tk.Frame(
+            parent,
+            bg="#111827",
+            padx=14 if not compact else 10,
+            pady=11 if not compact else 8,
+            highlightthickness=1,
+            highlightbackground="#26364f",
+        )
+        card.grid(row=row, column=col, sticky="ew", padx=(0 if col == 0 else 8, 0), pady=(0, 8))
+        card.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            card,
+            text=title,
+            fg="#f8fafc",
+            bg="#111827",
+            font=("Arial", 12 if not compact else 11, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        tk.Label(
+            card,
+            text=tag,
+            fg=accent,
+            bg="#111827",
+            font=("Arial", 10 if not compact else 9, "bold"),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", pady=(1, 0))
+
+        tk.Label(
+            card,
+            text=description,
+            fg="#aab8cf",
+            bg="#111827",
+            font=("Arial", 10 if not compact else 9),
+            anchor="w",
+            justify="left",
+            wraplength=360 if not compact else 255,
+        ).grid(row=2, column=0, sticky="ew", pady=(3, 0))
+
+        button_text = "Open" if key == "camera" else "Focus"
+        tk.Button(
+            card,
+            text=button_text,
+            command=lambda selected=key: self._open_training_ground(selected),
+            bg="#0f172a",
+            fg="#e0f2fe",
+            activebackground="#1e293b",
+            activeforeground="#ffffff",
+            relief="flat",
+            font=("Arial", 9, "bold"),
+            padx=8,
+            pady=5,
+        ).grid(row=0, column=1, rowspan=3, sticky="e", padx=(8, 0))
+
+    def _open_training_ground(self, key):
+        messages = {
+            "flight": (
+                "Sub-2 Flight selected: Q-learning is the reinforcement-learning module. "
+                "I set Flight to Q-learning; launch the sim to watch the learned policy run."
+            ),
+            "weather": (
+                "Sub-3 Weather selected: this is supervised SVM classification for umbrella decisions."
+            ),
+            "safety": (
+                "Sub-4 Safety selected: this uses an MDP policy table for battery and navigation overrides."
+            ),
+            "environment": (
+                "Environment selected: Building District is the stress scene for roads, buildings, and pedestrians."
+            ),
+        }
+
+        if key == "camera":
+            if self.training_window is None or self.training_window.closed:
+                self.training_window = CameraTrainingWindow(self.root)
+            else:
+                self.training_window.window.lift()
+            if self.training_status_var is not None:
+                self.training_status_var.set(
+                    "Sub-1 Camera is open. It should show LOCKED when confidence stays high and marker error is under 18px."
+                )
+            return
+
+        if key == "flight":
+            self.flight_var.set("q")
+        elif key == "environment":
+            self._set_scenario(SCENARIO_BUILDINGS)
+
+        if self.training_status_var is not None:
+            self.training_status_var.set(messages[key])
+
+    def _draw_launcher_hero(self, canvas):
+        canvas.update_idletasks()
+        width = int(canvas.winfo_width() or 980)
+        height = 150
+        canvas.create_rectangle(0, 0, width, height, fill="#08111f", outline="")
+        canvas.create_rectangle(0, 80, width, height, fill="#0d2a3d", outline="")
+        canvas.create_rectangle(0, 118, width, height, fill="#0f3a2a", outline="")
+
+        for x in range(0, width, 42):
+            top = 46 + (x * 7) % 38
+            shade = "#14243a" if x % 84 else "#1b3150"
+            canvas.create_rectangle(x, top, x + 30, 118, fill=shade, outline="")
+            if x % 84 == 0:
+                canvas.create_rectangle(x + 8, top + 12, x + 12, top + 18, fill="#facc15", outline="")
+                canvas.create_rectangle(x + 18, top + 28, x + 22, top + 34, fill="#facc15", outline="")
+
+        canvas.create_line(0, 118, width, 118, fill="#38bdf8", width=2)
+        canvas.create_text(
+            26, 34,
+            text="SkyShade",
+            anchor="w",
+            fill="#f8fafc",
+            font=("Arial", 30, "bold"),
+        )
+        canvas.create_text(
+            28, 68,
+            text="Autonomous drone umbrella simulation",
+            anchor="w",
+            fill="#b6c6dd",
+            font=("Arial", 13),
+        )
+
+        cx = width - 160
+        cy = 54
+        canvas.create_line(cx - 62, cy, cx + 62, cy, fill="#93c5fd", width=5)
+        canvas.create_line(cx, cy - 35, cx, cy + 35, fill="#93c5fd", width=5)
+        for dx, dy in [(-62, 0), (62, 0), (0, -35), (0, 35)]:
+            canvas.create_oval(cx + dx - 22, cy + dy - 10, cx + dx + 22, cy + dy + 10,
+                               outline="#bfdbfe", width=2)
+        canvas.create_rectangle(cx - 30, cy - 15, cx + 30, cy + 15,
+                                fill="#2563eb", outline="#bfdbfe", width=2)
+        canvas.create_arc(cx - 62, cy + 12, cx + 62, cy + 78,
+                          start=0, extent=180, fill="#38bdf8", outline="#e0f2fe", width=2)
+
+    def _scenario_card(self, parent, row, scenario):
+        shell = tk.Frame(
+            parent,
+            bg="#111827",
+            padx=10,
+            pady=9,
+            highlightthickness=2,
+            highlightbackground="#23334d",
+        )
+        shell.grid(row=row, column=0, sticky="ew", pady=(0, 8))
         shell.grid_columnconfigure(1, weight=1)
+        self.scenario_cards[scenario] = shell
+
+        preview = tk.Canvas(
+            shell,
+            width=112,
+            height=62,
+            bg="#07111f",
+            highlightthickness=0,
+        )
+        preview.grid(row=0, column=0, rowspan=2, sticky="nw", padx=(0, 14))
+        self._draw_scenario_preview(preview, scenario)
+
+        tk.Label(
+            shell,
+            text=SCENARIO_LABELS[scenario],
+            fg="#f8fafc",
+            bg="#111827",
+            font=("Arial", 13, "bold"),
+            anchor="w",
+        ).grid(row=0, column=1, sticky="ew")
+
+        tk.Label(
+            shell,
+            text=SCENARIO_DESCRIPTIONS[scenario],
+            fg="#aab8cf",
+            bg="#111827",
+            font=("Arial", 10),
+            anchor="nw",
+            justify="left",
+            wraplength=360,
+        ).grid(row=1, column=1, sticky="ew", pady=(4, 0))
 
         button = tk.Radiobutton(
             shell,
-            text=SCENARIO_LABELS[scenario],
+            text="Select",
             value=scenario,
             variable=self.scenario_var,
             indicatoron=False,
-            bg="#111c2e",
+            command=self._refresh_scenario_cards,
+            bg="#0f172a",
             fg="#f8fafc",
             selectcolor="#075985",
             activebackground="#1e293b",
             activeforeground="#ffffff",
             relief="flat",
-            font=("Arial", 13, "bold"),
+            font=("Arial", 9, "bold"),
             anchor="center",
-            padx=14,
-            pady=12,
-            width=15,
+            padx=10,
+            pady=5,
+            width=10,
         )
-        button.grid(row=0, column=0, sticky="nsw", padx=(0, 14))
+        button.grid(row=0, column=2, rowspan=2, sticky="e", padx=(14, 0))
 
-        tk.Label(
-            shell,
-            text=SCENARIO_DESCRIPTIONS[scenario],
-            fg="#94a3b8",
-            bg="#111c2e",
-            font=("Arial", 11),
-            anchor="w",
-            wraplength=460,
-            justify="left",
-        ).grid(row=0, column=1, sticky="ew")
+        for widget in (shell, preview):
+            widget.bind("<Button-1>", lambda _event, value=scenario: self._set_scenario(value))
+
+    def _draw_scenario_preview(self, canvas, scenario):
+        canvas.create_rectangle(0, 0, 112, 62, fill="#07111f", outline="")
+        canvas.create_rectangle(0, 37, 112, 62, fill="#12351f", outline="")
+        if scenario == SCENARIO_FOREST:
+            canvas.create_rectangle(0, 0, 112, 62, fill="#071a14", outline="")
+            canvas.create_polygon(0, 62, 34, 34, 78, 34, 112, 62, fill="#5b4329", outline="")
+            for x in (14, 32, 82, 98):
+                canvas.create_rectangle(x, 27, x + 4, 58, fill="#6b3f1d", outline="")
+                canvas.create_oval(x - 12, 9, x + 17, 36, fill="#1f6f3b", outline="")
+            canvas.create_line(16, 53, 97, 41, fill="#94a3b8", width=2)
+        elif scenario == SCENARIO_BUILDINGS:
+            canvas.create_rectangle(0, 0, 112, 62, fill="#08111f", outline="")
+            for x, top, color in [(7, 17, "#27364a"), (28, 8, "#334155"), (52, 21, "#1f2a44"), (80, 12, "#3b4251")]:
+                canvas.create_rectangle(x, top, x + 18, 45, fill=color, outline="")
+                for y in range(top + 7, 43, 10):
+                    canvas.create_rectangle(x + 5, y, x + 7, y + 3, fill="#fde68a", outline="")
+                    canvas.create_rectangle(x + 12, y, x + 14, y + 3, fill="#fde68a", outline="")
+            canvas.create_rectangle(0, 45, 112, 62, fill="#1f2937", outline="")
+            canvas.create_line(0, 53, 112, 53, fill="#facc15", width=2)
+        else:
+            canvas.create_rectangle(0, 0, 112, 62, fill="#0b2535", outline="")
+            canvas.create_rectangle(0, 34, 112, 62, fill="#1f5b35", outline="")
+            canvas.create_line(0, 51, 112, 33, fill="#9a7a4d", width=8)
+            for x, y in [(16, 36), (84, 32), (96, 47)]:
+                canvas.create_rectangle(x, y, x + 4, y + 15, fill="#6b3f1d", outline="")
+                canvas.create_oval(x - 9, y - 15, x + 14, y + 6, fill="#2f7d42", outline="")
+            canvas.create_oval(49, 14, 66, 30, outline="#dbeafe", width=2)
+
+    def _set_scenario(self, scenario):
+        self.scenario_var.set(scenario)
+        self._refresh_scenario_cards()
+
+    def _refresh_scenario_cards(self):
+        selected = self.scenario_var.get()
+        for scenario, card in self.scenario_cards.items():
+            active = scenario == selected
+            card.configure(
+                bg="#10243a" if active else "#111827",
+                highlightbackground="#38bdf8" if active else "#23334d",
+            )
+            for child in card.winfo_children():
+                if isinstance(child, tk.Label):
+                    child.configure(bg="#10243a" if active else "#111827")
 
     def _launch(self):
         try:
@@ -808,7 +1827,7 @@ def choose_launch_settings(default_duration=120.0):
     if tk is None:
         return {
             "scenario": SCENARIO_PARK,
-            "flight": "pid",
+            "flight": "q",
             "duration": default_duration,
             "gui": True,
         }
@@ -819,7 +1838,7 @@ def choose_launch_settings(default_duration=120.0):
         print(f"Launcher unavailable: {exc}")
         return {
             "scenario": SCENARIO_PARK,
-            "flight": "pid",
+            "flight": "q",
             "duration": default_duration,
             "gui": True,
         }
@@ -868,6 +1887,12 @@ class TelemetryWindow:
         self.graph_canvas = None
         self.ai_note_var = None
         self.gimbal_status_var = None
+        self.training_label = None
+        self.training_image = None
+        self.training_status_var = None
+        self.training_detail_var = None
+        self.training_tracker = Tracker(DistanceEstimator())
+        self.training_last_update_t = -1.0
         self.metric_history = {
             "confidence": [],
             "hover_error": [],
@@ -1208,8 +2233,8 @@ class TelemetryWindow:
         self.vision_window = tk.Toplevel(self.root)
         self.vision_window.title("SkyShade Drone POV And AI Evidence")
         self.vision_window.configure(bg="#07111f")
-        self.vision_window.geometry("1180x980+20+60")
-        self.vision_window.minsize(1000, 820)
+        self.vision_window.geometry("1240x1040+20+40")
+        self.vision_window.minsize(1060, 900)
         self.vision_window.protocol("WM_DELETE_WINDOW", self._hide_vision_window)
 
         tk.Label(
@@ -1221,16 +2246,25 @@ class TelemetryWindow:
             padx=14, pady=10,
         ).grid(row=0, column=0, sticky="ew")
 
-        self.camera_label = tk.Label(
+        camera_preview = tk.Frame(
             self.vision_window,
+            width=POV_DISPLAY_SIZE[0],
+            height=POV_DISPLAY_SIZE[1],
+            bg="#020617",
+            highlightthickness=1,
+            highlightbackground="#1f3a5f",
+        )
+        camera_preview.grid(row=1, column=0, sticky="n", padx=14)
+        camera_preview.grid_propagate(False)
+
+        self.camera_label = tk.Label(
+            camera_preview,
             bg="#020617",
             fg="#94a3b8",
             text="Waiting for camera frame...",
             font=("Arial", 12),
-            width=POV_DISPLAY_SIZE[0],
-            height=POV_DISPLAY_SIZE[1],
         )
-        self.camera_label.grid(row=1, column=0, sticky="nsew", padx=14)
+        self.camera_label.place(x=0, y=0, relwidth=1, relheight=1)
 
         self.gimbal_status_var = tk.StringVar(value="AI gimbal: waiting for prediction")
         tk.Label(
@@ -1256,11 +2290,13 @@ class TelemetryWindow:
         self.graph_canvas = tk.Canvas(
             self.vision_window,
             width=1120,
-            height=360,
+            height=230,
             bg="#0b1726",
             highlightthickness=0,
         )
         self.graph_canvas.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 10))
+
+        self._build_training_ground(self.vision_window, 5)
 
         self.ai_note_var = tk.StringVar(value="Collecting live metrics...")
         tk.Label(
@@ -1272,11 +2308,112 @@ class TelemetryWindow:
             padx=12, pady=9,
             wraplength=1120,
             justify="left",
-        ).grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 14))
+        ).grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 14))
 
         self.vision_window.grid_rowconfigure(1, weight=3)
-        self.vision_window.grid_rowconfigure(4, weight=2)
+        self.vision_window.grid_rowconfigure(4, weight=1)
+        self.vision_window.grid_rowconfigure(5, weight=1)
         self.vision_window.grid_columnconfigure(0, weight=1)
+
+    def _build_training_ground(self, parent, row):
+        ground = tk.Frame(parent, bg="#081322", padx=12, pady=12)
+        ground.grid(row=row, column=0, sticky="ew", padx=14, pady=(0, 10))
+        ground.grid_columnconfigure(0, weight=0)
+        ground.grid_columnconfigure(1, weight=1)
+
+        tk.Label(
+            ground,
+            text="Training Ground",
+            fg="#f8fafc", bg="#081322",
+            font=("Arial", 14, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        preview = tk.Frame(
+            ground,
+            width=TRAINING_DISPLAY_SIZE[0],
+            height=TRAINING_DISPLAY_SIZE[1],
+            bg="#020617",
+            highlightthickness=1,
+            highlightbackground="#1f3a5f",
+        )
+        preview.grid(row=1, column=0, rowspan=2, sticky="nw", pady=(10, 0), padx=(0, 14))
+        preview.grid_propagate(False)
+
+        self.training_label = tk.Label(
+            preview,
+            bg="#020617",
+            fg="#94a3b8",
+            text="Preparing camera trainer...",
+            font=("Arial", 10, "bold"),
+        )
+        self.training_label.place(x=0, y=0, relwidth=1, relheight=1)
+
+        info = tk.Frame(ground, bg="#081322")
+        info.grid(row=1, column=1, sticky="nsew", pady=(10, 0))
+        info.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            info,
+            text="Sub-1 Perception",
+            fg="#38bdf8", bg="#081322",
+            font=("Arial", 10, "bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        self.training_status_var = tk.StringVar(value="Camera trainer warming up")
+        tk.Label(
+            info,
+            textvariable=self.training_status_var,
+            fg="#f8fafc", bg="#0f172a",
+            font=("Arial", 12, "bold"),
+            anchor="w",
+            padx=10, pady=8,
+            wraplength=690,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(6, 0))
+
+        self.training_detail_var = tk.StringVar(
+            value="HSV marker segmentation + contour tracking + EMA smoothing"
+        )
+        tk.Label(
+            info,
+            textvariable=self.training_detail_var,
+            fg="#cbd5e1", bg="#111c2e",
+            font=("Arial", 10),
+            anchor="w",
+            padx=10, pady=8,
+            wraplength=690,
+            justify="left",
+        ).grid(row=2, column=0, sticky="ew", pady=(6, 0))
+
+        stages = tk.Frame(info, bg="#081322")
+        stages.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        stage_specs = [
+            ("Sub-1 Camera", "live check", "#22c55e"),
+            ("Sub-2 Flight", "Q-learning", "#60a5fa"),
+            ("Sub-3 Weather", "SVM", "#f472b6"),
+            ("Sub-4 Safety", "MDP", "#f59e0b"),
+            ("Environment", "scenarios", "#a78bfa"),
+        ]
+        for col, (title, tag, color) in enumerate(stage_specs):
+            tile = tk.Frame(stages, bg="#0f172a", padx=8, pady=7)
+            tile.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 6, 0))
+            stages.grid_columnconfigure(col, weight=1, uniform="training_stages")
+            tk.Label(
+                tile,
+                text=title,
+                fg="#f8fafc", bg="#0f172a",
+                font=("Arial", 9, "bold"),
+                anchor="center",
+            ).grid(row=0, column=0, sticky="ew")
+            tk.Label(
+                tile,
+                text=tag,
+                fg=color, bg="#0f172a",
+                font=("Arial", 8, "bold"),
+                anchor="center",
+            ).grid(row=1, column=0, sticky="ew", pady=(2, 0))
 
     def _hide_vision_window(self):
         self.vision_visible = False
@@ -1302,10 +2439,106 @@ class TelemetryWindow:
         x, y, w, h = cv2.boundingRect(largest)
         return x, y, w, h, area
 
-    def _frame_to_photo(self, frame):
-        display = cv2.resize(frame, POV_DISPLAY_SIZE, interpolation=cv2.INTER_AREA)
+    def _frame_to_photo(self, frame, size=POV_DISPLAY_SIZE):
+        display = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
         header = f"P6 {display.shape[1]} {display.shape[0]} 255\n".encode("ascii")
         return tk.PhotoImage(data=header + display.tobytes(), format="PPM")
+
+    def _make_training_frame(self, t_wall):
+        width, height = CAMERA_RES
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+
+        frame[:, :] = (10, 18, 31)
+        cv2.rectangle(frame, (0, height // 2), (width, height), (19, 35, 49), -1)
+        cv2.rectangle(frame, (0, 0), (width, 54), (15, 23, 38), -1)
+
+        horizon = height // 2
+        for x in range(-120, width + 120, 80):
+            cv2.line(frame, (x, height), (width // 2, horizon), (32, 63, 82), 1)
+        for y in range(horizon + 35, height, 46):
+            cv2.line(frame, (0, y), (width, y), (28, 56, 75), 1)
+
+        for x, y, w, h, color in [
+            (24, 72, 92, 182, (35, 48, 63)),
+            (500, 82, 78, 168, (38, 50, 68)),
+            (436, 126, 44, 102, (49, 64, 82)),
+        ]:
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, -1)
+            for wy in range(y + 18, y + h - 10, 28):
+                cv2.rectangle(frame, (x + 12, wy), (x + w - 12, wy + 7), (174, 196, 208), -1)
+
+        marker_cx = int(width / 2 + math.sin(t_wall * 0.95) * 150)
+        marker_cy = int(height / 2 + math.cos(t_wall * 1.18) * 58)
+        radius = int(24 + 5 * math.sin(t_wall * 0.7))
+
+        cv2.circle(frame, (150, 322), 18, (58, 105, 216), -1)
+        cv2.circle(frame, (498, 328), 20, (66, 190, 116), -1)
+        cv2.circle(frame, (marker_cx, marker_cy + radius + 24), 17, (198, 139, 86), -1)
+        cv2.line(frame, (marker_cx, marker_cy + radius + 42), (marker_cx - 22, marker_cy + radius + 82), (51, 92, 173), 6)
+        cv2.line(frame, (marker_cx, marker_cy + radius + 42), (marker_cx + 23, marker_cy + radius + 82), (51, 92, 173), 6)
+
+        cv2.circle(frame, (marker_cx, marker_cy), radius, (230, 24, 34), -1)
+        cv2.circle(frame, (marker_cx - radius // 3, marker_cy - radius // 3), max(4, radius // 5), (255, 100, 108), -1)
+
+        return frame, (marker_cx, marker_cy)
+
+    def _tick_training_ground(self, t_wall):
+        if self.training_label is None:
+            return
+        if self.training_last_update_t >= 0 and t_wall - self.training_last_update_t < 0.08:
+            return
+
+        self.training_last_update_t = t_wall
+        frame, expected = self._make_training_frame(t_wall)
+        pos, confidence = self.training_tracker.process_frame(frame)
+        overlay = frame.copy()
+
+        box = self._detect_marker_box(frame)
+        pixel_error = float("inf")
+        if box is not None:
+            x, y, w, h, area = box
+            detected = (x + w // 2, y + h // 2)
+            pixel_error = float(np.hypot(detected[0] - expected[0], detected[1] - expected[1]))
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 80), 3)
+            cv2.drawMarker(
+                overlay, detected, (255, 255, 255),
+                markerType=cv2.MARKER_CROSS, markerSize=18, thickness=2,
+            )
+            cv2.putText(
+                overlay, f"detected {pixel_error:.1f}px",
+                (max(8, x), max(26, y - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 80), 2,
+            )
+        else:
+            cv2.putText(
+                overlay, "searching",
+                (18, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 90, 90), 2,
+            )
+
+        cv2.circle(overlay, expected, 7, (255, 255, 255), 2)
+        cv2.putText(
+            overlay, "expected",
+            (expected[0] + 10, max(22, expected[1] - 12)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.46, (226, 232, 240), 1,
+        )
+
+        passing = confidence >= CONFIDENCE_THRESH and pixel_error <= TRAINING_PIXEL_PASS
+        verdict = "LOCKED" if passing else "SEARCHING"
+        err_text = f"{pixel_error:.1f}px" if math.isfinite(pixel_error) else "no lock"
+
+        if self.training_status_var is not None:
+            self.training_status_var.set(
+                f"{verdict}: confidence {confidence:.2f}, marker error {err_text}"
+            )
+        if self.training_detail_var is not None:
+            self.training_detail_var.set(
+                "Camera uses classic computer vision, not reinforcement learning: "
+                "HSV thresholding finds the red marker, contours locate it, EMA smooths it, "
+                f"and the distance estimator reports dx {pos[0]:+.2f} m, dy {pos[1]:+.2f} m, dz {pos[2]:.2f} m."
+            )
+
+        self.training_image = self._frame_to_photo(overlay, TRAINING_DISPLAY_SIZE)
+        self.training_label.configure(image=self.training_image, text="")
 
     def update_vision(
         self, frame, confidence, hover_error, avoidance_force,
@@ -1605,6 +2838,7 @@ class TelemetryWindow:
 
         self._flush_test_result()
         self._draw_hero(t_wall)
+        self._tick_training_ground(t_wall)
 
         try:
             self.root.update_idletasks()
@@ -1737,6 +2971,12 @@ def run(
             p.resetDebugVisualizerCamera(
                 cameraDistance=14.0, cameraYaw=35, cameraPitch=-34,
                 cameraTargetPosition=[0, 0, 1.3],
+                physicsClientId=phys,
+            )
+        elif scenario == SCENARIO_BUILDINGS:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=12.0, cameraYaw=42, cameraPitch=-31,
+                cameraTargetPosition=[0, 0, 1.4],
                 physicsClientId=phys,
             )
         else:
@@ -2030,8 +3270,8 @@ def main():
     ap.add_argument(
         "--flight",
         choices=["pid", "q"],
-        default="pid",
-        help="Flight controller: 'pid' for production control, or 'q' for the learned Sub-2 policy.",
+        default="q",
+        help="Flight controller: 'q' for the learned Sub-2 policy, or 'pid' for the fallback baseline.",
     )
     ap.add_argument(
         "--battery-start",

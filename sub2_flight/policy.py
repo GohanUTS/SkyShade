@@ -2,11 +2,11 @@
 Sub-2 Flight — flight policy implementations.
 
 FlightPolicy    : greedy policy backed by a pre-trained Q-table.
-PIDFlightPolicy : continuous PID hover controller (no Q-table required).
+PIDFlightPolicy : continuous fallback/baseline hover controller.
 
 The Q-learning environment now includes velocity buckets in its state, so the
 learned table can brake instead of flying through the hover target. PID remains
-the default production controller because it is smoother for the live demo.
+available as a fallback and comparison baseline.
 """
 
 import os
@@ -51,9 +51,8 @@ class PIDFlightPolicy:
     PID hover controller.
 
     Reads continuous position + velocity from the environment each tick and
-    outputs a 3-D force vector via env.pid_step().  It remains the smooth
-    default runtime controller; the Q-table is available for learned-policy
-    demos and validation.
+    outputs a 3-D force vector via env.pid_step().  It is kept as a fallback and
+    comparison baseline for the learned Q-table runtime controller.
 
     Gains are tuned for:
       DRONE_MASS_KG = 1.5 kg

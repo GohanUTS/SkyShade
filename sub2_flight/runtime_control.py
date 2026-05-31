@@ -87,9 +87,9 @@ def obstacle_avoidance_force(
 
 
 class RuntimeFlightController:
-    """Runtime adapter for PID or learned Q-flight control."""
+    """Runtime adapter for learned Q-flight control with PID fallback."""
 
-    def __init__(self, mode: str = "pid"):
+    def __init__(self, mode: str = "q"):
         self.requested_mode = "q" if str(mode).lower().startswith("q") else "pid"
         self.pid = PIDFlightPolicy()
         self.q_policy = None

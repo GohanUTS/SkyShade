@@ -1,7 +1,7 @@
 """
 Sub-2 Flight — validation test.
 
-Evaluates the PID hover controller across 10 episodes for each of three scenarios:
+Evaluates the PID baseline and learned Q-policy across 10 episodes for each scenario:
   1. Stationary user, no wind
   2. Stationary user, gusty wind (3 m/s)
   3. Walking user, gusty wind    (3 m/s)
@@ -164,7 +164,7 @@ def evaluate_q(rng):
         required = scenario["wind"] > 0.0
         status = ("PASS" if ok else "FAIL") if required else \
                  ("OK" if ok_conv else "INFO (calm-air dead-still hold is sensitive "
-                  "for discrete control; PID is the production controller)")
+                  "for discrete control; PID is the fallback baseline)")
         print(f"  Coverage hovers  : {conv}/{EVAL_EPISODES}  (target >= {Q_PASS_CONVERGED}, radius <= {Q_COVERAGE_RADIUS_M:.2f} m)  {'✓' if ok_conv else '✗'}")
         print(f"  Mean reward      : {mean_r:+.1f}  (divergence floor {Q_REWARD_FLOOR:+.0f})  {'✓' if ok_reward else '✗'}")
         print(f"  → {status}  {'[required]' if required else '[informational]'}")
