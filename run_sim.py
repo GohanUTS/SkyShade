@@ -2962,11 +2962,15 @@ class TrainingGroundsHub:
 
         changed2 = changed4 = False
 
-        # Sub-1: one tracker frame per tick
-        sub1_was_running = self._sub1_running
-        self._sub1_step()
-        if sub1_was_running:
-            self._update_sub1_plot()
+        # Which tab is the user currently looking at? (0=Sub-1, 1=Sub-2, 2=Sub-3, 3=Sub-4)
+        try:
+            active_tab = self._nb.index(self._nb.select())
+        except Exception:
+            active_tab = -1
+
+        # Sub-1 camera step only runs when that tab is visible (it's expensive)
+        if active_tab == 0 and self._sub1_running:
+            self._sub1_step()
 
         # Drain Sub-2 queue
         while True:
@@ -3126,10 +3130,16 @@ class TrainingGroundsHub:
                 self._sub3_train_btn.configure(state="normal", text="Train SVM")
                 self._sub3_status_var.set(f"Error: {msg[1][:100]}")
 
-        # Always redraw 3D scenes so the auto-rotation stays alive
-        self._update_sub2_plot()
-        self._update_sub3_plot()
-        self._update_sub4_plot()
+        # Only redraw the visible tab — 3D matplotlib renders are expensive;
+        # drawing all three every tick caused severe lag.
+        if active_tab == 1:
+            self._update_sub2_plot()
+        elif active_tab == 2:
+            self._update_sub3_plot()
+        elif active_tab == 3:
+            self._update_sub4_plot()
+        elif active_tab == 0 and self._sub1_running:
+            pass  # Sub-1 plot updated inline in _sub1_step()
 
         # Drain Sub-2 eval queue
         while True:
@@ -3195,7 +3205,7 @@ class TrainingGroundsHub:
                 self._nav_status_var.set(f"Eval error: {msg[1][:80]}")
 
         self._gate_var.set(self._gate_text())
-        self.window.after(200, self._tick)
+        self.window.after(350, self._tick)
 
     # _do_launch removed — hub is training-only; sim launch uses main Launcher
 
