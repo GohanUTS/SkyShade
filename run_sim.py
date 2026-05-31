@@ -2391,10 +2391,11 @@ class TrainingGroundsHub:
                                       activebackground="#b91c1c")
         warm = os.path.exists(self._PPO_PATH)
         run_n = len(self._sub2_runs) + 1
-        warm_note = f"Run {run_n} — fine-tuning existing model…" if warm else "Run 1 — training from scratch…"
+        warm_note = f"Run {run_n} — fine-tuning…" if warm else "Run 1 — training from scratch…"
+        mins = max(1, total_steps // 120_000)   # ~2000 steps/sec with 4 parallel envs
         self._sub2_status_var.set(
-            f"{warm_note}  ~{max(1, total_steps // 60000)} min  "
-            "(each run is shown as a new colour on the chart)")
+            f"{warm_note}  4 parallel envs  ~{mins} min  "
+            "(each run is a new colour on the chart)")
 
     def _stop_sub2(self):
         if not self._sub2_training:
