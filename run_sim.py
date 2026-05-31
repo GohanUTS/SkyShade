@@ -1514,12 +1514,12 @@ def _mpl_dark_axes(ax, title="", xlabel="", ylabel=""):
     ax.set_facecolor(_MPL_BG)
     for sp in ax.spines.values():
         sp.set_color(_MPL_EDGE)
-    ax.tick_params(colors=_MPL_TICK, labelsize=11)
+    ax.tick_params(colors=_MPL_TICK, labelsize=12)
     ax.xaxis.label.set_color(_MPL_LABEL)
     ax.yaxis.label.set_color(_MPL_LABEL)
-    ax.set_xlabel(xlabel, fontsize=11)
-    ax.set_ylabel(ylabel, fontsize=11)
-    ax.set_title(title, color=_MPL_TITLE, fontsize=12, pad=6)
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, color=_MPL_TITLE, fontsize=13, pad=7)
     ax.grid(True, color=_MPL_GRID, linestyle="--", alpha=0.4)
 
 
@@ -1600,7 +1600,8 @@ class TrainingGroundsHub:
         self._sub2_total      = 1_500_000
         self._sub2_training   = False
         self._sub2_ready      = os.path.exists(self._PPO_PATH)
-        self._sub2_start_time = None   # wall-clock start for ETA
+        self._sub2_start_time = None
+        self._sub2_runs       = []   # list of completed run histories for multi-line chart
 
         # ── Sub-4 MDP (battery safety, value iteration) ───────────────────────
         self._sub4_queue    = queue.Queue()
@@ -1767,11 +1768,11 @@ class TrainingGroundsHub:
         # Left: 3D hover arena.  Right: PPO reward curve.
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
         fig = Figure(figsize=(9, 4.4), dpi=90, facecolor=_MPL_FIG_BG)
-        gs  = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.06,
-                               left=0.02, right=0.98, top=0.93, bottom=0.07)
+        gs  = fig.add_gridspec(1, 2, width_ratios=[1.25, 1], wspace=0.08,
+                               left=0.02, right=0.98, top=0.93, bottom=0.09)
         ax_3d     = fig.add_subplot(gs[0], projection="3d")
         ax_reward = fig.add_subplot(gs[1])
-        _mpl_dark_axes(ax_reward, "PPO Reward Curve", "Timestep", "Mean reward")
+        _mpl_dark_axes(ax_reward, "PPO Reward — Training History", "Timestep", "Mean reward")
         self._style_3d_ax(ax_3d, "Hover Arena")
         self._sub2_fig     = fig
         self._sub2_ax_3d   = ax_3d
@@ -2383,14 +2384,17 @@ class TrainingGroundsHub:
         self._sub2_thread.start()
         self._sub2_training   = True
         self._sub2_efficiency = ""
+        self._sub2_history    = []   # fresh history for this run
         self._sub2_entry.configure(state="disabled")
-        self._sub2_start_btn.configure(state="normal" if False else "disabled")
+        self._sub2_start_btn.configure(state="disabled")
         self._sub2_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                       activebackground="#b91c1c")
-        warm_note = "Fine-tuning existing model…" if os.path.exists(self._PPO_PATH) else "Training from scratch…"
+        warm = os.path.exists(self._PPO_PATH)
+        run_n = len(self._sub2_runs) + 1
+        warm_note = f"Run {run_n} — fine-tuning existing model…" if warm else "Run 1 — training from scratch…"
         self._sub2_status_var.set(
-            f"{warm_note}  ~{max(1, total_steps // 60000)} min on CPU  "
-            "(each run improves the previous model)")
+            f"{warm_note}  ~{max(1, total_steps // 60000)} min  "
+            "(each run is shown as a new colour on the chart)")
 
     def _stop_sub2(self):
         if not self._sub2_training:
@@ -2550,75 +2554,107 @@ class TrainingGroundsHub:
         self._sub2_azim = (self._sub2_azim + 0.35) % 360
         ax.view_init(elev=20, azim=self._sub2_azim)
 
-        # ── Reward curve (right) with progress info ───────────────────────────
+        # ── Reward chart — completed runs + current run ───────────────────────
         ax_r = self._sub2_ax_reward
         ax_r.cla()
-        _mpl_dark_axes(ax_r, "PPO Reward Curve", "Timestep", "Mean reward")
+        _mpl_dark_axes(ax_r, "PPO Reward — Training History", "Timestep", "Mean reward")
 
-        if not self._sub2_history:
-            ax_r.text(0.5, 0.55,
-                      "Press  'Start Training'  to begin\n\n"
-                      "3-stage curriculum:\n"
-                      "  Stage 1 (0–500k)  calm hover\n"
-                      "  Stage 2 (500k–1M) gusty wind\n"
-                      "  Stage 3 (1M–1.5M) walking user",
+        RUN_COLS = ["#60a5fa", "#4ade80", "#fb923c", "#c084fc",
+                    "#f472b6", "#facc15", "#22d3ee", "#f87171"]
+        has_any = self._sub2_runs or self._sub2_history
+
+        if not has_any:
+            ax_r.text(0.5, 0.5,
+                      "Press  'Start Training'  to begin.\n\n"
+                      "Each run appears as a new colour.\n"
+                      "Keep retraining — watch the lines\n"
+                      "climb higher each session.",
                       ha="center", va="center", color="#64748b",
-                      transform=ax_r.transAxes, fontsize=10)
+                      transform=ax_r.transAxes, fontsize=11)
         else:
-            stage_col = {1: "#3b82f6", 2: "#ec4899", 3: "#8b5cf6"}
-            pts = self._sub2_history[::max(1, len(self._sub2_history) // 400)]
-            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; ss = [p[2] for p in pts]
+            legend_handles = []
 
-            # Stage background bands
-            ax_r.axvspan(0,         500_000,   alpha=0.06, color="#3b82f6")
-            ax_r.axvspan(500_000,   1_000_000, alpha=0.06, color="#ec4899")
-            ax_r.axvspan(1_000_000, 1_500_000, alpha=0.06, color="#8b5cf6")
+            # Completed runs — faded, one colour each
+            for i, run in enumerate(self._sub2_runs[-7:]):
+                col = RUN_COLS[i % len(RUN_COLS)]
+                pts = run[::max(1, len(run) // 300)]
+                rxs = [p[0] for p in pts]
+                rys = [p[1] for p in pts]
+                ax_r.plot(rxs, rys, color=col, lw=1.2, alpha=0.30)
+                if len(rys) >= 8:
+                    win = min(12, len(rys))
+                    ma  = np.convolve(rys, np.ones(win)/win, mode="valid")
+                    ax_r.plot(rxs[win-1:], ma, color=col, lw=2.4, alpha=0.80)
+                legend_handles.append(Patch(color=col, alpha=0.9, label=f"Run {i+1}"))
 
-            for i in range(1, len(pts)):
-                ax_r.plot([xs[i-1], xs[i]], [ys[i-1], ys[i]],
-                          color=stage_col.get(ss[i], "#60a5fa"), lw=1.6, solid_capstyle="round")
+            # Current active run — bright
+            if self._sub2_history:
+                run_idx  = len(self._sub2_runs)
+                cur_col  = RUN_COLS[run_idx % len(RUN_COLS)]
+                stage_col = {1: cur_col, 2: cur_col, 3: cur_col}
 
-            # Stage dividers
-            for xv in (500_000, 1_000_000):
-                ax_r.axvline(xv, color="#475569", ls="--", lw=0.9, alpha=0.5)
+                pts = self._sub2_history[::max(1, len(self._sub2_history) // 400)]
+                xs  = [p[0] for p in pts]
+                ys  = [p[1] for p in pts]
+                ss  = [p[2] for p in pts]
 
-            # Moving average (last 15 points)
-            if len(ys) >= 5:
-                win = min(15, len(ys))
-                ma  = np.convolve(ys, np.ones(win)/win, mode="valid")
-                xs_ma = xs[win-1:]
-                ax_r.plot(xs_ma, ma, color="#ffffff", lw=2.0, alpha=0.35, ls="-")
+                ax_r.plot(xs, ys, color=cur_col, lw=1.6, alpha=0.5)
+                if len(ys) >= 8:
+                    win = min(15, len(ys))
+                    ma  = np.convolve(ys, np.ones(win)/win, mode="valid")
+                    ax_r.plot(xs[win-1:], ma, color=cur_col, lw=3.0, alpha=1.0)
 
-            ax_r.set_xlim(0, max(self._sub2_total, xs[-1]))
+                ax_r.set_xlim(0, max(self._sub2_total, xs[-1]))
 
-            # ETA + progress annotation
-            if self._sub2_start_time and self._sub2_step > 100:
-                elapsed   = time.time() - self._sub2_start_time
-                rate      = self._sub2_step / elapsed        # steps/sec
-                remaining = max(0, self._sub2_total - self._sub2_step)
-                eta_sec   = remaining / max(rate, 1)
-                eta_str   = (f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
-                             if eta_sec > 3600 else f"{int(eta_sec//60)}m {int(eta_sec%60)}s")
-                pct = 100 * self._sub2_step / self._sub2_total
-                ax_r.set_title(
-                    f"PPO Reward  ·  {pct:.0f}% done  ·  ~{eta_str} left  "
-                    f"·  {rate:.0f} steps/s",
-                    color="#94a3b8", fontsize=10, pad=5)
+                # ETA title
+                if self._sub2_start_time and self._sub2_step > 100:
+                    elapsed   = time.time() - self._sub2_start_time
+                    rate      = self._sub2_step / elapsed
+                    remaining = max(0, self._sub2_total - self._sub2_step)
+                    eta_sec   = remaining / max(rate, 1)
+                    eta_str   = (f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
+                                 if eta_sec > 3600
+                                 else f"{int(eta_sec//60)}m {int(eta_sec%60)}s")
+                    pct = 100 * self._sub2_step / self._sub2_total
+                    ax_r.set_title(
+                        f"Run {run_idx+1}  ·  {pct:.0f}%  ·  ~{eta_str} left  ·  {rate:.0f} steps/s",
+                        color="#94a3b8", fontsize=11, pad=5)
 
-            # Trend arrow
-            if len(ys) >= 20:
-                trend = ys[-1] - ys[max(0, len(ys)-20)]
-                t_col = "#22c55e" if trend > 0 else "#f97316"
-                t_sym = "↑ improving" if trend > 0 else "→ flat"
-                ax_r.text(0.98, 0.04, t_sym, transform=ax_r.transAxes,
-                          ha="right", color=t_col, fontsize=11, fontweight="bold")
+                # Trend + explanation text
+                if len(ys) >= 20:
+                    trend  = ys[-1] - ys[max(0, len(ys) - 20)]
+                    latest = ys[-1]
+                    if latest < -800:
+                        expl, t_col = "Adjusting weights — dip is normal, reward rises after", "#f97316"
+                    elif trend > 50:
+                        expl, t_col = "↑ Improving fast", "#22c55e"
+                    elif trend > 0:
+                        expl, t_col = "↑ Improving", "#22c55e"
+                    else:
+                        expl, t_col = "→ Flat — run more steps or retrain", "#f97316"
+                    ax_r.text(0.98, 0.04, expl, transform=ax_r.transAxes,
+                              ha="right", color=t_col, fontsize=11, fontweight="bold")
 
-            ax_r.legend(handles=[
-                Patch(color="#3b82f6", label="S1 calm"),
-                Patch(color="#ec4899", label="S2 wind"),
-                Patch(color="#8b5cf6", label="S3 walk"),
-            ], facecolor="#0f172a", edgecolor=_MPL_EDGE, labelcolor="#94a3b8",
-               fontsize=9, loc="upper left")
+                # Dip explanation annotation
+                if len(ys) > 5 and ys[0] > -400 and min(ys) < ys[0] - 300:
+                    ax_r.annotate(
+                        "Initial dip: fine-tuning temporarily\n"
+                        "disrupts existing weights before\n"
+                        "settling on a better policy",
+                        xy=(xs[ys.index(min(ys))], min(ys)),
+                        xytext=(0.55, 0.12), textcoords="axes fraction",
+                        color="#94a3b8", fontsize=9,
+                        arrowprops=dict(arrowstyle="->", color="#475569", lw=1),
+                    )
+
+                legend_handles.append(
+                    Patch(color=cur_col, label=f"Run {run_idx+1} (active)"))
+
+            if legend_handles:
+                ax_r.legend(handles=legend_handles,
+                            facecolor="#0f172a", edgecolor=_MPL_EDGE,
+                            labelcolor="#e2e8f0", fontsize=10,
+                            loc="upper left", framealpha=0.85)
 
         self._sub2_canvas.draw_idle()
 
@@ -2860,16 +2896,22 @@ class TrainingGroundsHub:
                 warm = parts[3] if len(parts) > 3 else False
                 self._sub2_training = False
                 self._sub2_ready = os.path.exists(self._PPO_PATH)
+                # Archive completed run for multi-line history
+                if self._sub2_history:
+                    self._sub2_runs.append(list(self._sub2_history))
+                    self._sub2_history = []
                 self._sub2_entry.configure(state="normal")
-                self._sub2_start_btn.configure(state="normal")
+                run_n = len(self._sub2_runs)
+                btn_lbl = f"Fine-tune  (Run {run_n + 1})" if self._sub2_ready else "Start Training"
+                self._sub2_start_btn.configure(state="normal", text=btn_lbl)
                 self._sub2_stop_btn.configure(state="disabled", bg="#334155",
                                                fg="#94a3b8", activebackground="#475569")
                 warm_str = "fine-tuned from previous model" if warm else "trained from scratch"
                 eff_str  = (f"predicted hover efficiency  ~{eff}%"
                             if k == "done" else "partial save")
                 self._sub2_efficiency = (
-                    f"✓ Model trained — {eff_str}  ({warm_str})" if k == "done"
-                    else f"⏹ Stopped at {steps:,} steps — {eff_str}")
+                    f"✓ Run {run_n} done — {eff_str}  ({warm_str})" if k == "done"
+                    else f"⏹ Run {run_n} stopped — {eff_str}")
                 self._sub2_status_var.set(self._sub2_efficiency)
                 changed2 = True
             elif k == "error":
@@ -3335,19 +3377,6 @@ class ScenarioLauncher:
             anchor="w",
         ).grid(row=0, column=0, sticky="ew")
 
-        tk.Button(
-            header,
-            text="Open Camera",
-            command=lambda: self._open_training_ground("camera"),
-            bg="#2563eb",
-            fg="#eff6ff",
-            activebackground="#1d4ed8",
-            activeforeground="#ffffff",
-            relief="flat",
-            font=("Arial", 10, "bold"),
-            padx=10,
-            pady=6,
-        ).grid(row=0, column=1, sticky="e")
 
         tk.Label(
             panel,
