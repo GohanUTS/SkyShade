@@ -10,12 +10,13 @@ The Training Grounds hub is a dedicated window for training, visualising, and ev
 python run_sim.py
 ```
 
-In the left panel of the launcher, click any of the three training card buttons:
+In the left panel of the launcher, click any of the four training card buttons:
 
 | Button | Colour | Opens hub on tab |
 |---|---|---|
 | **Calibrate** | Green | Sub-1 Perception |
 | **Train PPO** | Blue | Sub-2 Flight PPO |
+| **Train SVM** | Pink | Sub-3 Weather SVM |
 | **Solve MDP** | Purple | Sub-4 Nav Safety |
 
 The hub window is titled **SkyShade — Training Grounds** and has three tabs along the top.
@@ -186,6 +187,59 @@ Click **Evaluate Model** to run 5 deterministic test episodes on stage-2 (gusty 
 
 ---
 
+## Sub-3 Weather SVM tab
+
+### Purpose
+
+Train and validate the SVM that decides whether to deploy or stow the umbrella canopy based on weather sensor readings. This is the fastest training in the hub — completes in under 2 seconds.
+
+### Left panel — 3D Weather Scene
+
+The scene auto-rotates and animates a 30-second weather cycle continuously.
+
+| Element | What it shows |
+|---|---|
+| **Cloud blob** | Grows larger and darker as rain intensity rises |
+| **Blue rain particles** | Vertical lines falling from cloud — more lines = heavier rain |
+| **Orange wind arrows** | At drone altitude — count increases with wind speed |
+| **Quadcopter drone** | At 2.5 m, same X-frame as Sub-2 |
+| **Green umbrella disc** | Canopy open — SVM predicted DEPLOY |
+| **Grey folded line** | Canopy closed — SVM predicted STOW |
+| **`☂ DEPLOY`** banner | Green = umbrella is open |
+| **`✕ STOW`** banner | Grey = umbrella is closed |
+
+The weather cycle runs automatically: **Clear ☀ → Cloudy ⛅ → Rainy 🌧 → Storm ⛈** (30 s per cycle). The umbrella should open during the rainy/storm phases and close during clear/cloudy.
+
+### Right panel — SVM Decision & Weather
+
+- **Three horizontal gauge bars**: Lux (yellow), Rain (blue), Wind (cyan) — show current live values
+- **Phase label**: Clear / Cloudy / Rainy / Storm
+- **Large decision banner**: `☂ DEPLOY` (green) or `✕ STOW` (grey)
+- **2×2 confusion matrix** (appears after training):
+  - Green cells = correct predictions (TP/TN)
+  - Red cells = errors (FP/FN)
+  - Numbers show count of samples in each category
+
+### Controls
+
+| Control | Description |
+|---|---|
+| **Train SVM** (pink) | Trains RBF SVM on `data/env_sensor_log.csv`, completes in < 2 sec |
+
+### Status bar messages
+
+| Message | Meaning |
+|---|---|
+| `Training SVM on weather sensor data…` | Training in progress |
+| `✓ SVM trained — CV accuracy 96.0%  (≥90% target met)` | Training succeeded |
+| `○ NOT TRAINED — click Train SVM` | Model file missing |
+
+### There is no Evaluate button — validation is the live demo
+
+The weather cycle IS the evaluation. If the umbrella opens in rain and closes in clear, the model is correct. The confusion matrix after training shows quantitative accuracy.
+
+---
+
 ## Sub-4 Nav Safety tab
 
 This tab controls two independent Sub-4 policies.
@@ -254,7 +308,7 @@ Runs 5 deterministic episodes through the obstacle room:
 ## Footer — Training status
 
 ```
-Sub-1 Perception ●   Sub-2 Flight PPO ○   Sub-4 Battery MDP ●   Sub-4 Nav PPO ●
+Sub-1 ●   Sub-2 PPO ○   Sub-3 SVM ●   Sub-4 MDP ●   Sub-4 Nav ●
 ```
 
 - `●` = model file exists on disk (trained/ready)

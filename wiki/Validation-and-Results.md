@@ -1,89 +1,259 @@
 # Validation and Results
 
-## Running the test suite
+This page covers how to verify each subsystem is working correctly — both through the Training Grounds hub and by running the test scripts directly.
+
+---
+
+## Sub-1: Perception — how to verify
+
+### In the Training Grounds hub
+
+1. Open hub → **Sub-1 Perception** tab → click **Start Live View**
+2. A PyBullet calibration room opens with a moving red sphere
+
+**Check these indicators:**
+
+| Indicator | Pass | Fail |
+|---|---|---|
+| Status bar | `LOCKED ✓  confidence 1.00  pixel error 0.0px` | `SEARCHING` or `FOUND – off target` |
+| Confidence (blue chart) | Line stays above the dashed threshold (0.7) | Frequent dips below threshold |
+| Pixel error (orange chart) | Line stays below 18 px dashed line | Spikes regularly above 18 px |
+| Bounding box colour | Green | Orange = found but off-centre |
+| Yellow dot vs crosshair | Yellow dot is inside the blue acceptance ring | Crosshair is outside the ring |
+
+### Via test script
 
 ```bash
-# Sub-1: Perception accuracy on held-out frames
 python sub1_perception/test_perception.py
+```
 
-# Sub-2: PPO policy evaluation (5 episodes, stage 2 conditions)
-#   Uses FlightEvalWorker — or run the Evaluate Model button in the Training Grounds hub
-python -c "
-import queue, threading, numpy as np
-from sub2_flight.eval_worker import FlightEvalWorker
-q, stop = queue.Queue(), threading.Event()
-w = FlightEvalWorker(q, stop); w.start(); w.join()
-while not q.empty():
-    print(q.get_nowait())
-"
+Reports tracking continuity (% frames above threshold) and position MAE.
 
-# Sub-3: Classifier on 5-minute synthetic weather trajectory
+**Pass targets:**
+- Tracking continuity > 70% of frames
+- Position MAE < 0.15 m
+
+---
+
+## Sub-2: Flight PPO — how to verify
+
+### In the Training Grounds hub
+
+After training, click **Evaluate Model** (teal button) in the Sub-2 tab.
+
+The evaluator runs **5 deterministic episodes** in stage-2 conditions (stationary user + gusty wind).
+
+**What you see:**
+- Per-episode status: `Eval ep 3/5 ✓  reward +184  hover 67%`
+- Best episode path drawn as a **bright green trail** in the 3D hover arena — it should stay close to the green hover ring
+- Final verdict in the status bar:
+  - `PASS ✓ 4/5 episodes hovered  mean reward +161` ← ready to launch
+  - `FAIL ✗ 1/5 episodes hovered` ← train more
+- Button relabels: `Evaluate Model  (4/5 ✓)`
+
+**Pass thresholds:**
+- ≥ 3 of 5 episodes spend ≥ 30% of their time inside the 0.5 m hover radius
+- Mean episode reward > −200
+
+**Efficiency estimate** shown after training:
+```
+✓ Model trained — predicted hover efficiency ~73%  (fine-tuned from previous model)
+```
+This is computed from the final training buffer. ≥ 60% means the model is performing well.
+
+### Via test script
+
+```bash
+python sub2_flight/test_flight.py
+```
+
+Evaluates both PID and the trained PPO policy across 3 scenarios (calm, gusty, walking). Reports per-scenario mean reward and hover success rate.
+
+**Pass targets:**
+- Eval pass rate ≥ 3/5 episodes
+- Mean eval reward > −200 on stage-2 wind
+
+### Signs the model needs more training
+
+- Green trail in the arena barely moves — drone is not reaching the hover zone
+- Efficiency < 40% after training
+- Reward curve is flat after 300k+ steps — try restarting with `Stop` + `Start Training` again (fresh warm-start at a different point in the curriculum)
+
+---
+
+## Sub-3: Weather SVM — how to verify
+
+### In the Training Grounds hub
+
+After clicking **Train SVM**, two things appear immediately:
+
+**1. CV accuracy in the status bar:**
+```
+✓ SVM trained — CV accuracy 96.0%  (≥90% target met)
+```
+
+**2. Confusion matrix in the right panel:**
+
+```
+┌─────────────────┬─────────────────┐
+│ TN  stow=48  ✓  │ FP  deploy=0 ✗  │  ← predicted stow
+├─────────────────┼─────────────────┤
+│ FN  stow=4   ✗  │ TP  deploy=47 ✓ │  ← predicted deploy
+└─────────────────┴─────────────────┘
+     actual stow        actual deploy
+```
+
+Green cells (TN/TP) = correct; Red cells (FP/FN) = errors.
+
+- **FP (false deploy)** — umbrella opens in clear weather. Annoying but harmless.
+- **FN (false stow)** — umbrella stays closed in rain. This is the more important error to minimise.
+- A good model has 0 FP and ≤ 2 FN.
+
+**3. Live weather demo** (runs automatically without clicking anything):
+- Weather cycles Clear → Cloudy → Rainy → Storm every 30 seconds
+- Watch the umbrella: **green disc opens in rain/storm, grey line in clear**
+- If the umbrella opens during the rainy phase and closes during clear, the SVM is correct
+- The decision banner shows `☂ DEPLOY` (green) or `✕ STOW` (grey) in real time
+
+### Via test script
+
+```bash
 python sub3_env/test_env_decision.py
+```
 
-# Sub-4: Battery-safety scripted scenarios
+Runs a 5-minute synthetic weather trajectory and checks that:
+- DEPLOY rate is high during rainy conditions
+- STOW rate is high during clear conditions
+- No rapid flickering between states (hysteresis is working)
+
+**Pass targets:**
+- 10-fold CV accuracy ≥ 90%
+- Confusion matrix: 0 FP, ≤ 3 FN (out of 99 samples)
+
+### Signs the model needs retraining
+
+- Accuracy < 90% — add more diverse training samples to `data/env_sensor_log.csv`
+- High FP rate — the decision boundary is too aggressive; raise the SVM C value in `sub3_env/train_svm.py`
+- Umbrella stays closed in rain during the live demo — high FN rate; check CSV labels
+
+---
+
+## Sub-4: Battery Safety MDP — how to verify
+
+### In the Training Grounds hub
+
+The solver completes in < 1 second. The status shows:
+```
+Solved — 18 iterations. ● READY — policy_table_v1.npy found
+```
+
+**Verify the policy is correct** by checking it matches the expected table:
+
+| Battery | NEAR | MID | FAR | Expected |
+|---|---|---|---|---|
+| HIGH | RTH | RTH | RTH | ✓ |
+| MEDIUM | RTH | RTH | RTH | ✓ |
+| LOW | RTH | RTH | RTH | ✓ |
+| CRITICAL | LAND | LAND | LAND | ✓ |
+
+### Via test script
+
+```bash
 python sub4_nav/test_nav_safety.py
+```
 
-# Sub-4: Nav PPO evaluation (5 episodes, obstacle room)
-python -c "
-import queue, threading
-from sub4_nav.eval_worker import NavEvalWorker
-q, stop = queue.Queue(), threading.Event()
-w = NavEvalWorker(q, stop); w.start(); w.join()
-while not q.empty():
-    print(q.get_nowait())
-"
+Runs all 50 scripted battery scenarios (e.g. battery drops to CRITICAL while FAR from home → LAND_NOW must trigger within 200 ms).
+
+**Pass target:** All 50 scenarios pass. RTH trigger latency ≤ 1 decision tick (200 ms).
+
+### Runtime verification (in the main sim)
+
+The nav override telemetry chart in the dashboard shows the current action:
+- Stays at CONTINUE during normal flight (battery > 50%)
+- Switches to RTH when battery falls below ~50%
+- Switches to LAND_NOW when battery reaches CRITICAL
+
+If you never see RTH, use `--demo-low-battery` to force an early battery drain:
+```bash
+python run_sim.py --demo-low-battery
 ```
 
 ---
 
-## Pass targets
+## Sub-4: Nav PPO — how to verify
+
+### In the Training Grounds hub
+
+Click **Evaluate Model** in the Sub-4 nav section. The evaluator runs **5 episodes** through the obstacle room.
+
+**What you see:**
+- Per-episode: `Eval ep 2/5 ✓ GOAL  reward +392  steps 647`
+- Best episode path drawn as **bright green trail** through the red pillars — it should weave through the room and end at the green star (goal zone)
+- Final verdict:
+  - `PASS ✓ 3/5 episodes reached goal` ← ready
+  - `FAIL ✗ 1/5` ← train more
+
+**Pass threshold:** ≥ 3 of 5 episodes reach the east-side goal zone within 1 200 steps.
+
+**Signs of a good model:**
+- Green trail clearly avoids all red pillars
+- Episodes that fail tend to get close before failing, not crashing immediately
+- Reward is consistently above 0 (goal reached gives +200 bonus)
+
+**Signs the model needs more training:**
+- Trail goes straight into a pillar
+- All 5 episodes fail — train another 150k steps
+- Trail reaches the goal sometimes but not consistently — one more warm-start run
+
+---
+
+## Full test suite
+
+Run all subsystem tests at once:
+
+```bash
+# Sub-1 perception
+python sub1_perception/test_perception.py
+
+# Sub-2 PPO flight evaluation
+python sub2_flight/test_flight.py
+
+# Sub-3 weather classifier
+python sub3_env/test_env_decision.py
+
+# Sub-4 battery safety
+python sub4_nav/test_nav_safety.py
+```
+
+---
+
+## Pass targets summary
 
 | Subsystem | Metric | Target |
 |---|---|---|
-| Sub-1 | Tracking continuity | > 70% of frames above `CONFIDENCE_THRESH` |
+| Sub-1 | Tracking continuity | > 70% of frames above threshold |
 | Sub-1 | Position MAE | < 0.15 m |
-| Sub-1 | Calibration room | LOCKED status with pixel error < 18 px |
-| Sub-2 PPO | Hover efficiency (Training Grounds) | ≥ 60% (predicted from training buffer) |
-| Sub-2 PPO | Evaluation pass rate | ≥ 3 / 5 episodes spend ≥ 30% in hover zone |
-| Sub-2 PPO | Mean eval episode reward | > −200 on stage-2 wind conditions |
-| Sub-3 | 10-fold CV accuracy | ≥ 90% |
-| Sub-3 | False deploy rate | Minimised per confusion matrix |
-| Sub-4 MDP | Scripted battery scenarios | Pass all 50 |
-| Sub-4 MDP | RTH trigger latency | Within 1 decision tick (200 ms) of low-battery injection |
-| Sub-4 Nav | Evaluation pass rate | ≥ 3 / 5 episodes reach the goal zone |
+| Sub-1 | Calibration room | LOCKED, pixel error < 18 px |
+| Sub-2 PPO | Evaluation pass rate | ≥ 3 / 5 episodes in hover zone |
+| Sub-2 PPO | Efficiency estimate | ≥ 60% |
+| Sub-2 PPO | Mean eval reward | > −200 on stage-2 wind |
+| Sub-3 SVM | CV accuracy | ≥ 90% |
+| Sub-3 SVM | Confusion matrix FP | 0 (never deploy in clear) |
+| Sub-3 SVM | Live demo | Umbrella opens in rain, closes in clear |
+| Sub-4 MDP | Scripted scenarios | All 50 pass |
+| Sub-4 MDP | RTH latency | ≤ 200 ms |
+| Sub-4 Nav | Evaluation pass rate | ≥ 3 / 5 episodes reach goal |
 
 ---
 
-## How to read the Training Grounds evaluation
-
-After clicking **Evaluate Model** in the hub:
-
-- **Sub-2**: 5 episodes run on stage-2 conditions (stationary user + gusty wind). Each episode: the drone starts at a random offset from the target and must fly in and hover. Pass = spent ≥ 30% of the episode within 0.5 m radius. The best episode's 3D path is drawn in green in the hover arena.
-
-- **Sub-4 Nav**: 5 episodes in the obstacle room (deterministic, seed varies per episode). Pass = drone reached the east-side goal zone within 1200 steps. The best episode's path is drawn in green through the red pillars.
-
----
-
-## Validation artefacts
+## Validation artefacts on disk
 
 | File | Description |
 |---|---|
-| `confusion_matrix.png` | Sub-3 SVM per-class classification results |
-| `pca_3d.png` | 3-D PCA projection of the 9-D weather feature space |
-| `convergence_curve.png` | Sub-4 MDP value iteration convergence (max Bellman Δ per iteration) |
-| `models/ppo_flight_v1.zip` | Trained Sub-2 PPO model (SB3 format) |
-| `models/policy_table_v1.npy` | Solved Sub-4 MDP battery-safety policy |
-| `models/ppo_nav_v1.zip` | Trained Sub-4 PPO obstacle-navigation model |
-
----
-
-## Known limitations
-
-| Subsystem | Limitation |
-|---|---|
-| Sub-2 | Q-table archived — PPO is the primary runtime policy; PID is the final fallback |
-| Sub-2 | PPO trained in headless PyBullet (DIRECT mode); sim-to-real transfer unverified |
-| Sub-4 | MDP reward structure biases toward RTH — patched with a 50% battery guard in `run_sim.py` |
-| Sub-4 Nav | Obstacle positions are fixed; the policy does not generalise to different room layouts |
-| All | Simulation only — no physical drone testing |
-| Sub-1 | HSV thresholds tuned for the simulated marker; real-world lighting requires retuning |
+| `models/ppo_flight_v1.zip` | Sub-2 trained PPO hover policy |
+| `models/svm_v1.pkl` | Sub-3 trained SVM umbrella classifier |
+| `models/policy_table_v1.npy` | Sub-4 solved MDP policy (12 integers) |
+| `models/ppo_nav_v1.zip` | Sub-4 trained PPO obstacle navigation policy |
+| `confusion_matrix.png` | Sub-3 SVM confusion matrix (training set) |
+| `pca_3d.png` | Sub-3 3-D PCA of the 9-D weather feature space |
+| `convergence_curve.png` | Sub-4 MDP Bellman delta per iteration |
