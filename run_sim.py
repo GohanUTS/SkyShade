@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import math
+import queue
 import subprocess
 import sys
 import threading
@@ -28,8 +29,11 @@ import numpy as np
 
 try:
     import tkinter as tk
+    from tkinter import ttk, messagebox as tk_messagebox
 except ImportError:
     tk = None
+    ttk = None
+    tk_messagebox = None
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -52,6 +56,12 @@ from sub2_flight.env.hover_env import (
 from sub3_env.classifier import UmbrellaClassifier
 from sub4_nav.policy_table import NavSafetyPolicy
 from sub4_nav.mdp import ACTION_NAMES
+from sub1_perception.training import (
+    camera_training_frame, camera_training_marker_box, camera_training_step,
+    TRAINING_PIXEL_PASS,
+)
+from sub2_flight.training_worker import FlightTrainingWorker as _FlightTrainingWorker
+from sub4_nav.training_worker import MDPSolverWorker as _MDPSolverWorker
 
 CONTROL_HZ         = 30
 BATTERY_DRAIN_RATE = 0.5    # % per second
@@ -88,13 +98,11 @@ USER_MARKER_HEIGHT = 1.62
 POV_DISPLAY_SIZE = (960, 540)
 TRAINING_DISPLAY_SIZE = (360, 270)
 LAUNCHER_TRAINING_DISPLAY_SIZE = (480, 360)
-TRAINING_PIXEL_PASS = 18.0
+# TRAINING_PIXEL_PASS imported from sub1_perception.training
 TRAINING_GROUND_ITEMS = (
-    ("camera", "Sub-1 Camera", "HSV tracker", "Live red-marker lock check.", "#22c55e"),
-    ("flight", "Sub-2 Flight", "Q-learning", "Hover policy trainer slot.", "#60a5fa"),
-    ("weather", "Sub-3 Weather", "SVM", "Umbrella classifier slot.", "#f472b6"),
-    ("safety", "Sub-4 Safety", "MDP", "Battery and navigation policy slot.", "#f59e0b"),
-    ("environment", "Environment", "Scenarios", "Park, forest, and buildings tests.", "#a78bfa"),
+    ("camera", "Sub-1 Perception",  "HSV tracker", "3D calibration room — live red-marker lock check.", "#22c55e"),
+    ("flight", "Sub-2 Flight",      "PPO",          "3D hover arena — PPO wind-gust curriculum training.", "#60a5fa"),
+    ("safety", "Sub-4 Nav Safety",  "MDP + PPO",    "3D obstacle room — lidar navigation + battery safety.", "#f59e0b"),
 )
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
@@ -1005,115 +1013,8 @@ def launcher_photo_from_frame(frame, size):
     return tk.PhotoImage(data=header + display.tobytes(), format="PPM")
 
 
-def camera_training_frame(t_wall):
-    width, height = CAMERA_RES
-    frame = np.zeros((height, width, 3), dtype=np.uint8)
-
-    frame[:, :] = (10, 18, 31)
-    cv2.rectangle(frame, (0, height // 2), (width, height), (19, 35, 49), -1)
-    cv2.rectangle(frame, (0, 0), (width, 54), (15, 23, 38), -1)
-
-    horizon = height // 2
-    for x in range(-120, width + 120, 80):
-        cv2.line(frame, (x, height), (width // 2, horizon), (32, 63, 82), 1)
-    for y in range(horizon + 35, height, 46):
-        cv2.line(frame, (0, y), (width, y), (28, 56, 75), 1)
-
-    for x, y, w, h, color in [
-        (24, 72, 92, 182, (35, 48, 63)),
-        (500, 82, 78, 168, (38, 50, 68)),
-        (436, 126, 44, 102, (49, 64, 82)),
-    ]:
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, -1)
-        for wy in range(y + 18, y + h - 10, 28):
-            cv2.rectangle(frame, (x + 12, wy), (x + w - 12, wy + 7), (174, 196, 208), -1)
-
-    marker_cx = int(width / 2 + math.sin(t_wall * 0.95) * 150)
-    marker_cy = int(height / 2 + math.cos(t_wall * 1.18) * 58)
-    radius = int(24 + 5 * math.sin(t_wall * 0.7))
-
-    cv2.circle(frame, (150, 322), 18, (58, 105, 216), -1)
-    cv2.circle(frame, (498, 328), 20, (66, 190, 116), -1)
-    cv2.circle(frame, (marker_cx, marker_cy + radius + 24), 17, (198, 139, 86), -1)
-    cv2.line(
-        frame, (marker_cx, marker_cy + radius + 42),
-        (marker_cx - 22, marker_cy + radius + 82),
-        (51, 92, 173), 6,
-    )
-    cv2.line(
-        frame, (marker_cx, marker_cy + radius + 42),
-        (marker_cx + 23, marker_cy + radius + 82),
-        (51, 92, 173), 6,
-    )
-
-    cv2.circle(frame, (marker_cx, marker_cy), radius, (230, 24, 34), -1)
-    cv2.circle(
-        frame,
-        (marker_cx - radius // 3, marker_cy - radius // 3),
-        max(4, radius // 5),
-        (255, 100, 108),
-        -1,
-    )
-
-    return frame, (marker_cx, marker_cy)
-
-
-def camera_training_marker_box(frame):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-    mask1 = cv2.inRange(hsv, HSV_LOWER, HSV_UPPER)
-    mask2 = cv2.inRange(hsv, HSV_LOWER2, HSV_UPPER2)
-    mask = cv2.bitwise_or(mask1, mask2)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    largest = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(largest)
-    if area < MIN_CONTOUR_AREA:
-        return None
-
-    x, y, w, h = cv2.boundingRect(largest)
-    return x, y, w, h, area
-
-
-def camera_training_step(tracker, t_wall):
-    frame, expected = camera_training_frame(t_wall)
-    pos, confidence = tracker.process_frame(frame)
-    overlay = frame.copy()
-
-    box = camera_training_marker_box(frame)
-    pixel_error = float("inf")
-    if box is not None:
-        x, y, w, h, area = box
-        detected = (x + w // 2, y + h // 2)
-        pixel_error = float(np.hypot(detected[0] - expected[0], detected[1] - expected[1]))
-        cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 255, 80), 3)
-        cv2.drawMarker(
-            overlay, detected, (255, 255, 255),
-            markerType=cv2.MARKER_CROSS, markerSize=18, thickness=2,
-        )
-        cv2.putText(
-            overlay, f"detected {pixel_error:.1f}px",
-            (max(8, x), max(26, y - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 80), 2,
-        )
-    else:
-        cv2.putText(
-            overlay, "searching",
-            (18, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 90, 90), 2,
-        )
-
-    cv2.circle(overlay, expected, 7, (255, 255, 255), 2)
-    cv2.putText(
-        overlay, "expected",
-        (expected[0] + 10, max(22, expected[1] - 12)),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (226, 232, 240), 1,
-    )
-
-    passing = confidence >= CONFIDENCE_THRESH and pixel_error <= TRAINING_PIXEL_PASS
-    return overlay, confidence, pixel_error, pos, passing
+# camera_training_frame / camera_training_marker_box / camera_training_step
+# are imported from sub1_perception.training
 
 
 class CameraTrainingWindow:
@@ -1235,6 +1136,1605 @@ class CameraTrainingWindow:
             pass
 
 
+# _FlightTrainingWorker imported from sub2_flight.training_worker as alias
+
+
+class FlightTrainingWindow:
+    """Live PPO training window for Sub-2 Flight.
+
+    Shows a scrolling reward curve (colour-coded by curriculum stage),
+    real-time stats, and Start / Stop controls.  Training runs in a
+    background thread so the UI stays responsive throughout.
+    """
+
+    _STEPS_DEFAULT = 1_500_000
+    _PLOT_W = 510
+    _PLOT_H = 230
+    _MAX_PLOT_POINTS = 400
+
+    def __init__(self, parent):
+        self.window = tk.Toplevel(parent)
+        self.window.title("Training Ground — Sub-2 Flight (PPO)")
+        self.window.configure(bg="#07111f")
+        self.window.geometry("960x560+140+140")
+        self.window.minsize(840, 480)
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+
+        self.closed = False
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._queue = queue.Queue()
+
+        self._rewards = []      # (timestep, reward, stage)
+        self._stage = 1
+        self._current_step = 0
+        self._total_steps = self._STEPS_DEFAULT
+        self._training_active = False
+
+        self._canvas = None
+        self._status_var = None
+        self._stat_vars = {}
+        self._steps_var = None
+        self._start_btn = None
+        self._stop_btn = None
+
+        self._build_ui()
+        self._tick()
+
+    # ── UI construction ───────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        container = tk.Frame(self.window, bg="#07111f", padx=16, pady=14)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.grid_columnconfigure(0, weight=0)
+        container.grid_columnconfigure(1, weight=1)
+        self.window.grid_rowconfigure(0, weight=1)
+        self.window.grid_columnconfigure(0, weight=1)
+
+        # Left — reward curve
+        plot_frame = tk.Frame(
+            container, bg="#020617",
+            highlightthickness=1, highlightbackground="#1f3a5f",
+            width=self._PLOT_W + 4,
+            height=self._PLOT_H + 64,
+        )
+        plot_frame.grid(row=0, column=0, sticky="nw", padx=(0, 16))
+        plot_frame.grid_propagate(False)
+
+        tk.Label(
+            plot_frame, text="Mean Episode Reward",
+            fg="#60a5fa", bg="#020617",
+            font=("Arial", 10, "bold"), anchor="w",
+        ).pack(side="top", fill="x", padx=8, pady=(6, 0))
+
+        self._canvas = tk.Canvas(
+            plot_frame, bg="#020617", highlightthickness=0,
+            width=self._PLOT_W, height=self._PLOT_H,
+        )
+        self._canvas.pack(side="top", fill="both", expand=True, padx=4, pady=4)
+
+        tk.Label(
+            plot_frame,
+            text="Blue = Stage 1  •  Pink = Stage 2  •  Purple = Stage 3",
+            fg="#475569", bg="#020617",
+            font=("Arial", 9),
+        ).pack(side="bottom", pady=(0, 6))
+
+        # Right — stats + controls
+        info = tk.Frame(container, bg="#07111f")
+        info.grid(row=0, column=1, sticky="nsew")
+        info.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            info, text="Sub-2 Flight — PPO",
+            fg="#60a5fa", bg="#07111f",
+            font=("Arial", 12, "bold"), anchor="w",
+        ).grid(row=0, column=0, sticky="ew")
+
+        self._status_var = tk.StringVar(value="Ready to train")
+        tk.Label(
+            info, textvariable=self._status_var,
+            fg="#f8fafc", bg="#0f172a",
+            font=("Arial", 14, "bold"),
+            anchor="w", padx=12, pady=10,
+            wraplength=300, justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(8, 0))
+
+        stats_frame = tk.Frame(info, bg="#111c2e", padx=10, pady=8)
+        stats_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        stats_frame.grid_columnconfigure(1, weight=1)
+
+        for i, (key, default) in enumerate([
+            ("Timestep",     "0 / 1 500 000"),
+            ("Stage",        "1 — stationary, calm"),
+            ("Mean reward",  "—"),
+            ("Model",        "not yet saved"),
+        ]):
+            tk.Label(
+                stats_frame, text=key + ":",
+                fg="#64748b", bg="#111c2e",
+                font=("Arial", 9, "bold"), anchor="w",
+            ).grid(row=i, column=0, sticky="w", pady=2)
+            v = tk.StringVar(value=default)
+            self._stat_vars[key] = v
+            tk.Label(
+                stats_frame, textvariable=v,
+                fg="#cbd5e1", bg="#111c2e",
+                font=("Arial", 9), anchor="w",
+            ).grid(row=i, column=1, sticky="w", padx=(8, 0), pady=2)
+
+        ep_row = tk.Frame(info, bg="#07111f")
+        ep_row.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        ep_row.grid_columnconfigure(1, weight=1)
+
+        tk.Label(
+            ep_row, text="Timesteps",
+            fg="#94a3b8", bg="#07111f",
+            font=("Arial", 10, "bold"), anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 10))
+
+        self._steps_var = tk.StringVar(value=str(self._STEPS_DEFAULT))
+        self._ep_entry = tk.Entry(
+            ep_row, textvariable=self._steps_var,
+            bg="#020617", fg="#f8fafc",
+            insertbackground="#f8fafc",
+            relief="flat", font=("Arial", 12, "bold"),
+            width=9, justify="center",
+        )
+        self._ep_entry.grid(row=0, column=1, sticky="w")
+
+        btn_frame = tk.Frame(info, bg="#07111f")
+        btn_frame.grid(row=4, column=0, sticky="ew", pady=(14, 0))
+        btn_frame.grid_columnconfigure(0, weight=1)
+        btn_frame.grid_columnconfigure(1, weight=1)
+
+        self._start_btn = tk.Button(
+            btn_frame, text="Start Training",
+            command=self._start_training,
+            bg="#2563eb", fg="#eff6ff",
+            activebackground="#1d4ed8", activeforeground="#ffffff",
+            relief="flat", font=("Arial", 11, "bold"),
+            padx=10, pady=9,
+        )
+        self._start_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self._stop_btn = tk.Button(
+            btn_frame, text="Stop",
+            command=self._stop_training,
+            bg="#334155", fg="#94a3b8",
+            activebackground="#475569", activeforeground="#ffffff",
+            relief="flat", font=("Arial", 11, "bold"),
+            padx=10, pady=9, state="disabled",
+        )
+        self._stop_btn.grid(row=0, column=1, sticky="ew")
+
+        tk.Button(
+            info, text="Close",
+            command=self.close,
+            bg="#1e293b", fg="#cbd5e1",
+            activebackground="#334155", activeforeground="#ffffff",
+            relief="flat", font=("Arial", 11, "bold"),
+            padx=12, pady=9,
+        ).grid(row=5, column=0, sticky="ew", pady=(12, 0))
+
+    # ── Training control ──────────────────────────────────────────────────────
+
+    def _start_training(self):
+        if self._training_active:
+            return
+        try:
+            total_steps = max(2048, int(self._steps_var.get()))
+        except ValueError:
+            total_steps = self._STEPS_DEFAULT
+        self._total_steps = total_steps
+        self._rewards.clear()
+        self._current_step = 0
+
+        self._stop_event.clear()
+        self._thread = _FlightTrainingWorker(total_steps, self._queue, self._stop_event)
+        self._thread.start()
+
+        self._training_active = True
+        self._ep_entry.configure(state="disabled")
+        self._start_btn.configure(state="disabled")
+        self._stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
+                                 activebackground="#b91c1c")
+        self._status_var.set("Training…")
+
+    def _stop_training(self):
+        if not self._training_active:
+            return
+        self._stop_event.set()
+        self._status_var.set("Stopping…")
+        self._stop_btn.configure(state="disabled")
+
+    # ── UI update loop ────────────────────────────────────────────────────────
+
+    def _tick(self):
+        if self.closed:
+            return
+
+        changed = False
+        while True:
+            try:
+                msg = self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+            kind = msg[0]
+            if kind == "progress":
+                _, timestep, stage, mean_reward = msg
+                self._rewards.append((timestep, mean_reward, stage))
+                self._stage = stage
+                self._current_step = timestep
+                changed = True
+
+            elif kind in ("done", "stopped"):
+                _, _output_path, steps_done = msg
+                self._training_active = False
+                self._ep_entry.configure(state="normal")
+                self._start_btn.configure(state="normal")
+                self._stop_btn.configure(state="disabled", bg="#334155",
+                                         fg="#94a3b8", activebackground="#475569")
+                verb = "Done" if kind == "done" else "Stopped"
+                self._status_var.set(f"{verb} — {steps_done:,} steps trained")
+                changed = True
+
+            elif kind == "error":
+                _, err = msg
+                self._training_active = False
+                self._ep_entry.configure(state="normal")
+                self._start_btn.configure(state="normal")
+                self._stop_btn.configure(state="disabled", bg="#334155",
+                                         fg="#94a3b8", activebackground="#475569")
+                self._status_var.set(f"Error: {err[:80]}")
+                changed = True
+
+        if changed or self._training_active:
+            self._update_stats()
+            self._draw_plot()
+
+        self.window.after(160, self._tick)
+
+    def _update_stats(self):
+        self._stat_vars["Timestep"].set(
+            f"{self._current_step:,} / {self._total_steps:,}"
+        )
+        stage_labels = {
+            1: "1 — stationary, calm",
+            2: "2 — stationary, wind",
+            3: "3 — walking, wind",
+        }
+        self._stat_vars["Stage"].set(stage_labels.get(self._stage, str(self._stage)))
+
+        if self._rewards:
+            recent = [r for _, r, _ in self._rewards[-20:]]
+            self._stat_vars["Mean reward"].set(f"{np.mean(recent):+.1f}")
+
+        model_path = _FlightTrainingWorker.OUTPUT_PATH + ".zip"
+        if os.path.exists(model_path):
+            self._stat_vars["Model"].set("ppo_flight_v1.zip  (saved)")
+        else:
+            self._stat_vars["Model"].set("not yet saved")
+
+    def _draw_plot(self):
+        canvas = self._canvas
+        w = int(canvas.winfo_width()) or self._PLOT_W
+        h = int(canvas.winfo_height()) or self._PLOT_H
+        canvas.delete("all")
+
+        if not self._rewards:
+            canvas.create_text(
+                w // 2, h // 2,
+                text="No training data yet — press Start Training",
+                fill="#334155", font=("Arial", 11),
+            )
+            return
+
+        # Downsample for rendering
+        step = max(1, len(self._rewards) // self._MAX_PLOT_POINTS)
+        pts = self._rewards[::step]
+        vals = [r for _, r, _ in pts]
+        stages = [s for _, _, s in pts]
+
+        min_r = min(vals)
+        max_r = max(vals)
+        if max_r - min_r < 1:
+            max_r = min_r + 1
+
+        pad_x, pad_y = 38, 18
+        plot_w = w - 2 * pad_x
+        plot_h = h - 2 * pad_y
+
+        # Grid
+        for frac in (0.25, 0.5, 0.75):
+            y = pad_y + int((1 - frac) * plot_h)
+            canvas.create_line(pad_x, y, w - pad_x, y,
+                               fill="#1e3a5f", width=1, dash=(3, 4))
+            val = min_r + frac * (max_r - min_r)
+            canvas.create_text(pad_x - 4, y, text=f"{val:+.0f}",
+                               fill="#475569", font=("Arial", 8), anchor="e")
+
+        # Axis labels
+        canvas.create_text(pad_x - 4, pad_y, text=f"{max_r:+.0f}",
+                           fill="#475569", font=("Arial", 8), anchor="e")
+        canvas.create_text(pad_x - 4, h - pad_y, text=f"{min_r:+.0f}",
+                           fill="#475569", font=("Arial", 8), anchor="e")
+        canvas.create_text(w - pad_x, h - pad_y + 2,
+                           text=f"step {self._current_step:,}",
+                           fill="#475569", font=("Arial", 8), anchor="se")
+
+        stage_fg = {1: "#3b82f6", 2: "#ec4899", 3: "#8b5cf6"}
+
+        n = len(pts)
+        if n < 2:
+            return
+
+        for i in range(1, n):
+            x0 = pad_x + int((i - 1) / (n - 1) * plot_w)
+            x1 = pad_x + int(i / (n - 1) * plot_w)
+            y0 = pad_y + int((1 - (vals[i - 1] - min_r) / (max_r - min_r)) * plot_h)
+            y1 = pad_y + int((1 - (vals[i] - min_r) / (max_r - min_r)) * plot_h)
+            color = stage_fg.get(stages[i], "#60a5fa")
+            canvas.create_line(x0, y0, x1, y1, fill=color, width=1)
+
+        # Current position marker
+        last_x = pad_x + plot_w
+        last_y = pad_y + int((1 - (vals[-1] - min_r) / (max_r - min_r)) * plot_h)
+        canvas.create_oval(last_x - 4, last_y - 4, last_x + 4, last_y + 4,
+                           fill=stage_fg.get(stages[-1], "#60a5fa"), outline="")
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def close(self):
+        self._stop_event.set()
+        self.closed = True
+        try:
+            self.window.destroy()
+        except tk.TclError:
+            pass
+
+
+# _MDPSolverWorker imported from sub4_nav.training_worker as alias
+
+
+# ── Matplotlib dark-theme helper (shared by TrainingGroundsHub) ───────────────
+_MPL_BG      = "#020617"
+_MPL_FIG_BG  = "#07111f"
+_MPL_EDGE    = "#1f3a5f"
+_MPL_TICK    = "#475569"
+_MPL_LABEL   = "#64748b"
+_MPL_TITLE   = "#60a5fa"
+_MPL_GRID    = "#1e3a5f"
+
+
+def _mpl_dark_axes(ax, title="", xlabel="", ylabel=""):
+    """Apply the SkyShade dark colour theme to a matplotlib Axes."""
+    ax.set_facecolor(_MPL_BG)
+    for sp in ax.spines.values():
+        sp.set_color(_MPL_EDGE)
+    ax.tick_params(colors=_MPL_TICK, labelsize=8)
+    ax.xaxis.label.set_color(_MPL_LABEL)
+    ax.yaxis.label.set_color(_MPL_LABEL)
+    ax.set_xlabel(xlabel, fontsize=9)
+    ax.set_ylabel(ylabel, fontsize=9)
+    ax.set_title(title, color=_MPL_TITLE, fontsize=10, pad=5)
+    ax.grid(True, color=_MPL_GRID, linestyle="--", alpha=0.4)
+
+
+class TrainingGroundsHub:
+    """Unified training-grounds window with live matplotlib graphs.
+
+    Tabs
+    ────
+    Sub-1 Perception : HSV tracker calibration — rolling confidence + pixel-error chart
+    Sub-2 Flight PPO : PPO reward curve coloured by curriculum stage
+    Sub-4 Nav Safety : MDP convergence curve + learned policy heatmap
+
+    Training-only window — no sim launch here.
+    Each tab has its own Start / Stop controls.
+    The footer shows which models are trained.
+    Launch the main sim from the SkyShade Launcher window.
+    """
+
+    _PPO_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "models", "ppo_flight_v1.zip"
+    )
+    _MDP_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "models", "policy_table_v1.npy"
+    )
+    _NAV_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "models", "ppo_nav_v1.zip"
+    )
+
+    def __init__(self, parent, launch_callback=None):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+        self.window = tk.Toplevel(parent)
+        self.window.title("SkyShade — Training Grounds")
+        self.window.configure(bg="#07111f")
+        self.window.geometry("1160x760+60+60")
+        self.window.minsize(900, 620)
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+        self.closed      = False
+        self._launch_cb  = launch_callback
+        self._nb         = None   # ttk.Notebook — set in _build_ui
+
+        # ── Sub-1 (PyBullet perception room + HSV tracker, main thread) ─────────
+        self._sub1_perc_env  = None   # PerceptionTrainingEnv, lazy-init
+        self._sub1_tracker   = Tracker(DistanceEstimator())
+        self._sub1_running   = False
+        self._sub1_history   = []     # [(frame_idx, confidence, pixel_error)]
+        self._sub1_frame_idx = 0
+        self._sub1_start_t   = 0.0
+        self._sub1_ready     = True   # tracker always available
+        self._sub1_img_ref   = None   # matplotlib imshow AxesImage (reused)
+
+        # ── Sub-2 (PPO flight training) ───────────────────────────────────────
+        self._sub2_queue    = queue.Queue()
+        self._sub2_stop     = threading.Event()
+        self._sub2_thread   = None
+        self._sub2_history  = []     # [(timestep, mean_reward, stage)]
+        self._sub2_step       = 0
+        self._sub2_total      = 1_500_000
+        self._sub2_training   = False
+        self._sub2_ready      = os.path.exists(self._PPO_PATH)
+        self._sub2_start_time = None   # wall-clock start for ETA
+
+        # ── Sub-4 MDP (battery safety, value iteration) ───────────────────────
+        self._sub4_queue    = queue.Queue()
+        self._sub4_stop     = threading.Event()
+        self._sub4_thread   = None
+        self._sub4_deltas   = []
+        self._sub4_policy   = None
+        self._sub4_iters    = 0
+        self._sub4_training = False
+        self._sub4_ready    = os.path.exists(self._MDP_PATH)
+        if self._sub4_ready:
+            try:
+                self._sub4_policy = np.load(self._MDP_PATH)
+            except Exception:
+                pass
+
+        # ── Sub-4 Nav (obstacle avoidance, PPO) ──────────────────────────────
+        self._nav_queue    = queue.Queue()
+        self._nav_stop     = threading.Event()
+        self._nav_thread   = None
+        self._nav_history  = []     # [(timestep, mean_reward)]
+        self._nav_step     = 0
+        self._nav_total    = 500_000
+        self._nav_training = False
+        self._nav_ready    = os.path.exists(self._NAV_PATH)
+        self._nav_viz      = None   # latest viz state dict from worker
+
+        # ── Matplotlib figures & axes (populated in _build_ui) ──────────────
+        self._sub1_fig = self._sub1_canvas = None
+        self._sub1_ax_cam = self._sub1_ax_chart = self._sub1_ax_err = None
+        self._sub2_fig = self._sub2_canvas = None
+        self._sub2_ax_3d = self._sub2_ax_reward = None   # 3D arena | reward
+        self._sub4_fig = self._sub4_canvas = None
+        self._sub4_ax_3d = self._sub4_ax_reward = None   # 3D nav room | reward
+        # Auto-rotation azimuth angles (degrees) — incremented each tick
+        self._sub2_azim = -55.0
+        self._sub4_azim = -60.0
+
+        # ── Evaluation state ──────────────────────────────────────────────────
+        self._sub2_eval_queue  = queue.Queue()
+        self._sub2_eval_stop   = threading.Event()
+        self._sub2_eval_thread = None
+        self._sub2_eval_active = False
+        self._sub2_eval_path   = []   # best episode path for 3D overlay
+        self._sub2_eval_result = ""   # summary text
+
+        self._nav_eval_queue   = queue.Queue()
+        self._nav_eval_stop    = threading.Event()
+        self._nav_eval_thread  = None
+        self._nav_eval_active  = False
+        self._nav_eval_path    = []   # best episode path for 3D overlay
+        self._nav_eval_result  = ""   # summary text
+
+        # ── Tkinter vars & widgets ────────────────────────────────────────────
+        self._sub1_status_var = None
+        self._sub2_status_var = None
+        self._sub4_status_var = None
+        self._nav_status_var  = None
+        self._sub2_steps_var  = None
+        self._nav_steps_var   = None
+        self._gate_var        = None
+        self._sub1_btn        = None
+        self._sub2_start_btn  = self._sub2_stop_btn = self._sub2_entry = None
+        self._sub2_eval_btn   = None
+        self._sub4_solve_btn  = self._sub4_stop_btn = None
+        self._nav_start_btn   = self._nav_stop_btn  = self._nav_entry = None
+        self._nav_eval_btn    = None
+
+        self._build_ui(Figure, FigureCanvasTkAgg)
+        self._tick()
+
+    # ── UI construction ───────────────────────────────────────────────────────
+
+    def _build_ui(self, Figure, FigureCanvasTkAgg):
+        # Header
+        hdr = tk.Frame(self.window, bg="#07111f", padx=20, pady=10)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="SkyShade — Training Grounds",
+                 fg="#60a5fa", bg="#07111f", font=("Arial", 14, "bold")).pack(side="left")
+        tk.Label(hdr, text="Train each subsystem before launching the simulation.",
+                 fg="#475569", bg="#07111f", font=("Arial", 10)).pack(side="left", padx=(14, 0))
+
+        # Notebook
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("TNotebook",        background="#07111f", borderwidth=0)
+        style.configure("TNotebook.Tab",    background="#0f172a", foreground="#94a3b8",
+                        font=("Arial", 10, "bold"), padding=[16, 7])
+        style.map("TNotebook.Tab",
+                  background=[("selected", "#1e3a5f")],
+                  foreground=[("selected", "#7dd3fc")])
+        style.configure("TFrame", background="#07111f")
+
+        self._nb = ttk.Notebook(self.window)
+        self._nb.pack(fill="both", expand=True, padx=14, pady=(0, 6))
+
+        tab1 = tk.Frame(self._nb, bg="#07111f")
+        tab2 = tk.Frame(self._nb, bg="#07111f")
+        tab4 = tk.Frame(self._nb, bg="#07111f")
+        self._nb.add(tab1, text="  Sub-1  Perception  ")
+        self._nb.add(tab2, text="  Sub-2  Flight PPO  ")
+        self._nb.add(tab4, text="  Sub-4  Nav Safety  ")
+
+        self._build_sub1_tab(tab1, Figure, FigureCanvasTkAgg)
+        self._build_sub2_tab(tab2, Figure, FigureCanvasTkAgg)
+        self._build_sub4_tab(tab4, Figure, FigureCanvasTkAgg)
+
+        # Footer — training status only, no sim launch
+        footer = tk.Frame(self.window, bg="#0f172a", padx=20, pady=10)
+        footer.pack(fill="x", side="bottom")
+        footer.grid_columnconfigure(0, weight=1)
+
+        self._gate_var = tk.StringVar(value=self._gate_text())
+        tk.Label(footer, textvariable=self._gate_var,
+                 fg="#94a3b8", bg="#0f172a", font=("Arial", 10)).grid(row=0, column=0, sticky="w")
+        tk.Label(footer, text="Launch the main sim from the SkyShade Launcher window.",
+                 fg="#334155", bg="#0f172a", font=("Arial", 9, "italic")).grid(row=0, column=1, sticky="e")
+
+        if self._sub4_policy is not None:
+            self._update_sub4_plot()
+
+    def _build_sub1_tab(self, frame, Figure, FigureCanvasTkAgg):
+        # Left: camera imshow.  Right: dual-axis chart (confidence + pixel error).
+        # constrained_layout handles spacing automatically with twinx axes.
+        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG,
+                     layout="constrained")
+        gs      = fig.add_gridspec(1, 2, width_ratios=[1.4, 1], wspace=0.05)
+        ax_cam   = fig.add_subplot(gs[0])
+        ax_chart = fig.add_subplot(gs[1])
+        # Pixel-error right axis — created ONCE here, reused every tick
+        ax_err   = ax_chart.twinx()
+
+        ax_cam.set_facecolor("#000000")
+        ax_cam.set_xticks([]); ax_cam.set_yticks([])
+        ax_cam.set_title("Live Camera View", color=_MPL_TITLE, fontsize=11, pad=5)
+
+        self._sub1_fig        = fig
+        self._sub1_ax_cam     = ax_cam
+        self._sub1_ax_chart   = ax_chart
+        self._sub1_ax_err     = ax_err   # pixel-error right axis (twinx, permanent)
+
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(10, 2))
+        self._sub1_canvas = canvas
+
+        ctrl = tk.Frame(frame, bg="#07111f", padx=14, pady=8)
+        ctrl.pack(fill="x")
+        self._sub1_status_var = tk.StringVar(value="Idle — click Start Live View to open the perception room")
+        tk.Label(ctrl, textvariable=self._sub1_status_var,
+                 fg="#94a3b8", bg="#07111f", font=("Arial", 10, "bold"), anchor="w"
+                 ).pack(side="left", fill="x", expand=True)
+        self._sub1_btn = tk.Button(ctrl, text="Start Live View",
+                                   command=self._toggle_sub1,
+                                   bg="#166534", fg="#dcfce7", relief="flat",
+                                   font=("Arial", 10, "bold"), padx=12, pady=6)
+        self._sub1_btn.pack(side="right")
+
+    def _build_sub2_tab(self, frame, Figure, FigureCanvasTkAgg):
+        # Left: 3D hover arena.  Right: PPO reward curve.
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
+        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG)
+        gs  = fig.add_gridspec(1, 2, width_ratios=[1.1, 1], wspace=0.05,
+                               left=0.02, right=0.98, top=0.92, bottom=0.08)
+        ax_3d     = fig.add_subplot(gs[0], projection="3d")
+        ax_reward = fig.add_subplot(gs[1])
+        _mpl_dark_axes(ax_reward, "PPO Reward Curve", "Timestep", "Mean reward")
+        self._style_3d_ax(ax_3d, "Hover Arena")
+        self._sub2_fig     = fig
+        self._sub2_ax_3d   = ax_3d
+        self._sub2_ax_reward = ax_reward
+
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(10, 2))
+        self._sub2_canvas = canvas
+
+        ctrl = tk.Frame(frame, bg="#07111f", padx=14, pady=6)
+        ctrl.pack(fill="x")
+        ctrl.grid_columnconfigure(1, weight=1)
+
+        self._sub2_status_var = tk.StringVar(value=self._model_label(2))
+        tk.Label(ctrl, textvariable=self._sub2_status_var,
+                 fg="#94a3b8", bg="#07111f", font=("Arial", 10, "bold"), anchor="w"
+                 ).grid(row=0, column=0, columnspan=4, sticky="w")
+
+        tk.Label(ctrl, text="Timesteps:", fg="#64748b", bg="#07111f", font=("Arial", 9)
+                 ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._sub2_steps_var = tk.StringVar(value="1500000")
+        self._sub2_entry = tk.Entry(ctrl, textvariable=self._sub2_steps_var,
+                                    bg="#020617", fg="#f8fafc", insertbackground="#f8fafc",
+                                    relief="flat", font=("Arial", 11, "bold"), width=10)
+        self._sub2_entry.grid(row=1, column=1, sticky="w", padx=(8, 24), pady=(6, 0))
+
+        self._sub2_start_btn = tk.Button(ctrl, text="Start Training",
+                                         command=self._start_sub2,
+                                         bg="#2563eb", fg="#eff6ff", relief="flat",
+                                         font=("Arial", 10, "bold"), padx=12, pady=6)
+        self._sub2_start_btn.grid(row=1, column=2, sticky="e", pady=(6, 0))
+
+        self._sub2_stop_btn = tk.Button(ctrl, text="Stop",
+                                        command=self._stop_sub2,
+                                        bg="#334155", fg="#94a3b8", relief="flat",
+                                        font=("Arial", 10, "bold"), padx=12, pady=6,
+                                        state="disabled")
+        self._sub2_stop_btn.grid(row=1, column=3, sticky="e", padx=(8, 0), pady=(6, 0))
+
+        self._sub2_eval_btn = tk.Button(ctrl, text="Evaluate Model",
+                                        command=self._run_sub2_eval,
+                                        bg="#0e7490", fg="#cffafe", relief="flat",
+                                        font=("Arial", 10, "bold"), padx=12, pady=6)
+        self._sub2_eval_btn.grid(row=2, column=0, columnspan=4, sticky="ew",
+                                  pady=(8, 0))
+
+    def _build_sub4_tab(self, frame, Figure, FigureCanvasTkAgg):
+        # Left: 3D obstacle navigation room.  Right: PPO nav reward curve.
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG)
+        gs  = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.05,
+                               left=0.02, right=0.98, top=0.92, bottom=0.08)
+        ax_3d     = fig.add_subplot(gs[0], projection="3d")
+        ax_reward = fig.add_subplot(gs[1])
+        _mpl_dark_axes(ax_reward, "Nav PPO Reward Curve", "Timestep", "Mean reward")
+        self._style_3d_ax(ax_3d, "Obstacle Navigation Room")
+        self._sub4_fig     = fig
+        self._sub4_ax_3d   = ax_3d
+        self._sub4_ax_reward = ax_reward
+
+        canvas = FigureCanvasTkAgg(fig, master=frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(10, 2))
+        self._sub4_canvas = canvas
+
+        # Nav training controls
+        nav_ctrl = tk.Frame(frame, bg="#07111f", padx=14, pady=4)
+        nav_ctrl.pack(fill="x")
+        nav_ctrl.grid_columnconfigure(1, weight=1)
+
+        self._nav_status_var = tk.StringVar(
+            value="● READY — ppo_nav_v1.zip found" if self._nav_ready
+            else "○ NOT TRAINED — click Train Navigation to start PPO")
+        tk.Label(nav_ctrl, textvariable=self._nav_status_var,
+                 fg="#94a3b8", bg="#07111f", font=("Arial", 10, "bold"), anchor="w"
+                 ).grid(row=0, column=0, columnspan=4, sticky="w")
+
+        tk.Label(nav_ctrl, text="Steps:", fg="#64748b", bg="#07111f", font=("Arial", 9)
+                 ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self._nav_steps_var = tk.StringVar(value="500000")
+        self._nav_entry = tk.Entry(nav_ctrl, textvariable=self._nav_steps_var,
+                                   bg="#020617", fg="#f8fafc", insertbackground="#f8fafc",
+                                   relief="flat", font=("Arial", 11, "bold"), width=9)
+        self._nav_entry.grid(row=1, column=1, sticky="w", padx=(8, 20), pady=(4, 0))
+
+        self._nav_start_btn = tk.Button(nav_ctrl, text="Train Navigation",
+                                        command=self._start_nav,
+                                        bg="#0f766e", fg="#ccfbf1", relief="flat",
+                                        font=("Arial", 10, "bold"), padx=10, pady=5)
+        self._nav_start_btn.grid(row=1, column=2, sticky="e", pady=(4, 0))
+
+        self._nav_stop_btn = tk.Button(nav_ctrl, text="Stop",
+                                       command=self._stop_nav,
+                                       bg="#334155", fg="#94a3b8", relief="flat",
+                                       font=("Arial", 10, "bold"), padx=10, pady=5,
+                                       state="disabled")
+        self._nav_stop_btn.grid(row=1, column=3, sticky="e", padx=(6, 0), pady=(4, 0))
+
+        self._nav_eval_btn = tk.Button(nav_ctrl, text="Evaluate Model",
+                                       command=self._run_nav_eval,
+                                       bg="#0e7490", fg="#cffafe", relief="flat",
+                                       font=("Arial", 10, "bold"), padx=10, pady=5)
+        self._nav_eval_btn.grid(row=2, column=0, columnspan=4, sticky="ew",
+                                 pady=(6, 0))
+
+        # MDP solver — compact secondary row
+        mdp_ctrl = tk.Frame(frame, bg="#0f172a", padx=14, pady=4)
+        mdp_ctrl.pack(fill="x")
+        mdp_ctrl.grid_columnconfigure(0, weight=1)
+
+        self._sub4_status_var = tk.StringVar(value=self._model_label(4))
+        tk.Label(mdp_ctrl, textvariable=self._sub4_status_var,
+                 fg="#64748b", bg="#0f172a", font=("Arial", 9), anchor="w"
+                 ).grid(row=0, column=0, sticky="w")
+
+        self._sub4_solve_btn = tk.Button(mdp_ctrl, text="Solve Battery-Safety MDP",
+                                         command=self._start_sub4,
+                                         bg="#4c1d95", fg="#ddd6fe", relief="flat",
+                                         font=("Arial", 9, "bold"), padx=8, pady=4)
+        self._sub4_solve_btn.grid(row=0, column=1, sticky="e")
+
+        self._sub4_stop_btn = tk.Button(mdp_ctrl, text="Stop",
+                                        command=self._stop_sub4,
+                                        bg="#1e293b", fg="#94a3b8", relief="flat",
+                                        font=("Arial", 9, "bold"), padx=8, pady=4,
+                                        state="disabled")
+        self._sub4_stop_btn.grid(row=0, column=2, sticky="e", padx=(4, 0))
+
+    # ── Status helpers ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _style_3d_ax(ax, title: str = ""):
+        """Apply SkyShade dark theme to a 3D Axes3D instance."""
+        ax.set_facecolor(_MPL_BG)
+        ax.set_title(title, color=_MPL_TITLE, fontsize=10, pad=4)
+        for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
+            pane.fill = True
+            pane.set_facecolor("#07111f")
+            pane.set_edgecolor("#1e3a5f")
+        ax.tick_params(colors="#475569", labelsize=7)
+        ax.xaxis.label.set_color("#475569")
+        ax.yaxis.label.set_color("#475569")
+        ax.zaxis.label.set_color("#475569")
+        ax.grid(True, color="#1e3a5f", lw=0.4)
+
+    def _model_label(self, sub: int) -> str:
+        if sub == 2:
+            return ("● READY — ppo_flight_v1.zip found" if self._sub2_ready
+                    else "○ NOT TRAINED — click Start Training to generate the PPO model")
+        if sub == 4:
+            return ("● READY — policy_table_v1.npy found" if self._sub4_ready
+                    else "○ NOT SOLVED — click Solve MDP to run value iteration")
+        return ""
+
+    def _all_ready(self) -> bool:
+        return self._sub2_ready and self._sub4_ready
+
+    def _gate_text(self) -> str:
+        s1 = "●"
+        s2 = "●" if self._sub2_ready else "○"
+        s4 = "●" if self._sub4_ready else "○"
+        sn = "●" if self._nav_ready   else "○"
+        return (f"Sub-1 Perception {s1}   Sub-2 Flight PPO {s2}"
+                f"   Sub-4 Battery MDP {s4}   Sub-4 Nav PPO {sn}")
+
+    def select_tab(self, idx: int):
+        """Select a tab by 0-based index (0=Sub-1, 1=Sub-2, 2=Sub-4)."""
+        if self._nb is not None:
+            self._nb.select(idx)
+
+    # ── Sub-1 controls & plot ─────────────────────────────────────────────────
+
+    def _toggle_sub1(self):
+        self._sub1_running = not self._sub1_running
+        if self._sub1_running:
+            self._sub1_start_t = time.time()
+            self._sub1_frame_idx = 0
+            self._sub1_history.clear()
+            self._sub1_img_ref = None
+            self._sub1_btn.configure(text="Stop Live View")
+            self._sub1_status_var.set("Starting perception room…")
+        else:
+            self._sub1_btn.configure(text="Start Live View")
+            self._sub1_status_var.set("Stopped.")
+            if self._sub1_perc_env is not None:
+                self._sub1_perc_env.close()
+                self._sub1_perc_env = None
+
+    def _sub1_step(self):
+        if not self._sub1_running:
+            return
+        try:
+            from sub1_perception.training_env import PerceptionTrainingEnv
+            from sub1_perception.training import camera_training_marker_box
+            if self._sub1_perc_env is None:
+                self._sub1_perc_env = PerceptionTrainingEnv()
+
+            t = time.time() - self._sub1_start_t
+            frame_rgb, sphere_3d = self._sub1_perc_env.step(t)
+
+            # Project the sphere's known 3D position to 2D pixel — this is the
+            # "expected" target centre the tracker should land on.
+            expected_px = self._sub1_perc_env.project_to_pixel(sphere_3d)
+
+            # Run HSV detection on the rendered frame
+            _pos, confidence = self._sub1_tracker.process_frame(frame_rgb)
+            box = camera_training_marker_box(frame_rgb)
+            overlay = frame_rgb.copy()
+            pixel_error = float("inf")
+
+            if box is not None:
+                x, y, w, h, _area = box
+                detected_px = (x + w // 2, y + h // 2)
+                if expected_px is not None:
+                    pixel_error = float(np.hypot(
+                        detected_px[0] - expected_px[0],
+                        detected_px[1] - expected_px[1],
+                    ))
+                # Bounding box — green if passing, orange if not
+                passing_det = pixel_error <= TRAINING_PIXEL_PASS
+                box_col = (0, 220, 80) if passing_det else (255, 140, 0)
+                cv2.rectangle(overlay, (x, y), (x + w, y + h), box_col, 3)
+                # Detection crosshair (white)
+                cv2.drawMarker(overlay, detected_px, (255, 255, 255),
+                               cv2.MARKER_CROSS, 20, 2)
+                # Pixel error label
+                err_txt = f"{pixel_error:.0f}px" if math.isfinite(pixel_error) else "?"
+                cv2.putText(overlay, f"err {err_txt}",
+                            (max(4, x), max(18, y - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.52, box_col, 2)
+
+            # Draw the TARGET zone: yellow circle at sphere's projected position,
+            # blue ring = acceptance radius (tracker must stay within this)
+            if expected_px is not None:
+                epx, epy = expected_px
+                if 0 <= epx < frame_rgb.shape[1] and 0 <= epy < frame_rgb.shape[0]:
+                    # Acceptance-zone ring (pixel radius = TRAINING_PIXEL_PASS)
+                    zone_r = max(1, int(TRAINING_PIXEL_PASS))
+                    zone_col = (80, 180, 255)   # blue
+                    cv2.circle(overlay, (epx, epy), zone_r, zone_col, 2)
+                    # Target centre dot (yellow)
+                    cv2.circle(overlay, (epx, epy), 6, (255, 210, 0), -1)
+                    cv2.putText(overlay, "target",
+                                (epx + 8, max(14, epy - 8)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 210, 0), 1)
+
+            # Status
+            passing = (confidence >= CONFIDENCE_THRESH
+                       and math.isfinite(pixel_error)
+                       and pixel_error <= TRAINING_PIXEL_PASS)
+            err_str = f"{pixel_error:.1f}px" if math.isfinite(pixel_error) else "no detection"
+            verdict  = "LOCKED ✓" if passing else ("FOUND – off target" if box else "SEARCHING")
+            self._sub1_status_var.set(
+                f"{verdict}   confidence {confidence:.2f}   pixel error {err_str}")
+
+            # Store history (frame, confidence, pixel_error)
+            self._sub1_history.append(
+                (self._sub1_frame_idx,
+                 float(confidence),
+                 float(pixel_error) if math.isfinite(pixel_error) else 50.0))
+            self._sub1_frame_idx += 1
+            if len(self._sub1_history) > 200:
+                self._sub1_history = self._sub1_history[-200:]
+
+            # ── Camera view (imshow) ──────────────────────────────────────────
+            ax_cam = self._sub1_ax_cam
+            if self._sub1_img_ref is None:
+                self._sub1_img_ref = ax_cam.imshow(overlay, aspect="auto")
+                ax_cam.set_xticks([]); ax_cam.set_yticks([])
+            else:
+                self._sub1_img_ref.set_data(overlay)
+
+            # ── Confidence + pixel-error chart (right) ────────────────────────
+            ax2 = self._sub1_ax_chart
+            ax3 = self._sub1_ax_err   # permanent twinx — clear and redraw each tick
+            ax2.cla()
+            ax3.cla()
+
+            # Re-apply styles after cla()
+            ax2.set_facecolor(_MPL_BG)
+            for sp in ax2.spines.values():
+                sp.set_color(_MPL_EDGE)
+            ax2.tick_params(colors="#94a3b8", labelsize=11)
+            ax2.set_xlabel("Frame", color="#94a3b8", fontsize=12)
+            ax2.set_ylabel("Confidence", color="#60a5fa", fontsize=12)
+            ax2.set_title("Tracking Accuracy", color=_MPL_TITLE, fontsize=12, pad=6)
+            ax2.grid(True, color=_MPL_GRID, linestyle="--", alpha=0.4)
+
+            for sp in ax3.spines.values():
+                sp.set_color(_MPL_EDGE)
+            ax3.tick_params(colors="#f97316", labelsize=11)
+            ax3.set_ylabel("Pixel error (px)", color="#f97316", fontsize=12)
+            ax3.set_facecolor(_MPL_BG)
+
+            if len(self._sub1_history) > 1:
+                xs = [h[0] for h in self._sub1_history]
+                cs = [h[1] for h in self._sub1_history]
+                es = [h[2] for h in self._sub1_history]
+
+                ax2.plot(xs, cs, color="#60a5fa", lw=2.0, label="Confidence")
+                ax2.axhline(CONFIDENCE_THRESH, color="#60a5fa",
+                            ls="--", lw=1.2, alpha=0.6,
+                            label=f"threshold {CONFIDENCE_THRESH:.2f}")
+                ax2.set_ylim(0, 1.12)
+
+                ax3.plot(xs, es, color="#f97316", lw=1.8, label="Pixel error")
+                ax3.axhline(TRAINING_PIXEL_PASS, color="#f97316",
+                            ls="--", lw=1.2, alpha=0.6,
+                            label=f"pass ≤ {int(TRAINING_PIXEL_PASS)}px")
+                ax3.set_ylim(-2, 56)
+
+                # Shade passing region green
+                ax2.fill_between(xs,
+                                 [c if c >= CONFIDENCE_THRESH else 0 for c in cs],
+                                 CONFIDENCE_THRESH,
+                                 where=[c >= CONFIDENCE_THRESH for c in cs],
+                                 color="#22c55e", alpha=0.12)
+
+                # Combined legend, larger font
+                h1, l1 = ax2.get_legend_handles_labels()
+                h2, l2 = ax3.get_legend_handles_labels()
+                ax2.legend(h1 + h2, l1 + l2,
+                           facecolor="#0f172a", edgecolor="#334155",
+                           labelcolor="#e2e8f0", fontsize=10,
+                           loc="lower right")
+            else:
+                ax2.text(0.5, 0.5, "Waiting for frames…",
+                         ha="center", va="center", color="#475569",
+                         transform=ax2.transAxes, fontsize=11)
+
+            self._sub1_canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _update_sub1_plot(self):
+        pass  # all updates handled inline in _sub1_step()
+
+    # ── Sub-2 controls & plot ─────────────────────────────────────────────────
+
+    def _start_sub2(self):
+        if self._sub2_training:
+            return
+        try:
+            total = max(2048, int(self._sub2_steps_var.get()))
+        except ValueError:
+            total = 1_500_000
+        self._sub2_total = total
+        self._sub2_history.clear()
+        self._sub2_step       = 0
+        self._sub2_start_time = time.time()
+        self._sub2_stop.clear()
+        self._sub2_thread = _FlightTrainingWorker(total, self._sub2_queue, self._sub2_stop)
+        self._sub2_thread.start()
+        self._sub2_training = True
+        self._sub2_entry.configure(state="disabled")
+        self._sub2_start_btn.configure(state="disabled")
+        self._sub2_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
+                                      activebackground="#b91c1c")
+        self._sub2_status_var.set("Training PPO…")
+
+    def _stop_sub2(self):
+        if not self._sub2_training:
+            return
+        self._sub2_stop.set()
+        self._sub2_stop_btn.configure(state="disabled")
+        self._sub2_status_var.set("Stopping…")
+
+    def _update_sub2_plot(self):
+        from matplotlib.patches import Patch
+        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+        stage = (self._sub2_history[-1][2] if self._sub2_history else 1)
+        t_now = time.time()
+
+        ROOM_W     = 7.0    # square room half-width (m)
+        TARGET_ALT = 2.5    # hover altitude (m)
+        CEIL_H     = 4.0    # ceiling height (m)
+        HOVER_R    = 0.5    # target hover radius (m)
+
+        # Stage descriptions for the overlay text
+        STAGE_DESC = {
+            1: ("Stage 1 / 3  —  Calm air",
+                "Drone learns to fly up and\nhold position above the target.\nNo wind, stationary user."),
+            2: ("Stage 2 / 3  —  Gusty wind",
+                "Random gusts hit the drone\nfrom every direction. It must\nresist and stay on target."),
+            3: ("Stage 3 / 3  —  Walking user",
+                "The user walks; drone must\ntrack them in gusty wind\nwhile maintaining altitude."),
+        }
+
+        # ── 3D Training Room ─────────────────────────────────────────────────
+        ax = self._sub2_ax_3d
+        ax.cla()
+        self._style_3d_ax(ax)
+
+        # Floor — dark grid
+        for x in np.linspace(-ROOM_W, ROOM_W, 8):
+            ax.plot([x, x], [-ROOM_W, ROOM_W], [0, 0],
+                    color="#1e293b", lw=0.6, alpha=0.6)
+        for y in np.linspace(-ROOM_W, ROOM_W, 8):
+            ax.plot([-ROOM_W, ROOM_W], [y, y], [0, 0],
+                    color="#1e293b", lw=0.6, alpha=0.6)
+        # Floor outline
+        ax.plot([-ROOM_W, ROOM_W, ROOM_W, -ROOM_W, -ROOM_W],
+                [-ROOM_W, -ROOM_W, ROOM_W, ROOM_W, -ROOM_W],
+                [0]*5, color="#334155", lw=1.5)
+
+        # 4 semi-transparent walls (as polygon collections)
+        wall_col = "#0f2235"
+        wall_alpha = 0.25
+        for (xs, ys) in [
+            ([-ROOM_W, ROOM_W, ROOM_W, -ROOM_W], [-ROOM_W,-ROOM_W,-ROOM_W,-ROOM_W]),
+            ([-ROOM_W, ROOM_W, ROOM_W, -ROOM_W], [ ROOM_W, ROOM_W, ROOM_W, ROOM_W]),
+            ([-ROOM_W,-ROOM_W,-ROOM_W,-ROOM_W], [-ROOM_W, ROOM_W, ROOM_W,-ROOM_W]),
+            ([ ROOM_W, ROOM_W, ROOM_W, ROOM_W], [-ROOM_W, ROOM_W, ROOM_W,-ROOM_W]),
+        ]:
+            verts = list(zip(xs, ys, [0, 0, CEIL_H, CEIL_H]))
+            poly  = Poly3DCollection([verts], alpha=wall_alpha,
+                                     facecolor=wall_col, edgecolor="#1e3a5f")
+            ax.add_collection3d(poly)
+
+        # Ceiling outline (faint)
+        ax.plot([-ROOM_W, ROOM_W, ROOM_W, -ROOM_W, -ROOM_W],
+                [-ROOM_W,-ROOM_W, ROOM_W, ROOM_W,-ROOM_W],
+                [CEIL_H]*5, color="#1e3a5f", lw=0.8, alpha=0.3)
+
+        # Landing-pad circle on the floor below hover target
+        theta = np.linspace(0, 2*math.pi, 40)
+        ax.plot(HOVER_R*1.5*np.cos(theta), HOVER_R*1.5*np.sin(theta),
+                np.zeros(40), color="#22c55e", lw=1.5, alpha=0.5, ls="--")
+
+        # Green hover-zone ring at target altitude
+        ax.plot(HOVER_R*np.cos(theta), HOVER_R*np.sin(theta),
+                np.full(40, TARGET_ALT), color="#22c55e", lw=2.5, alpha=0.9)
+        # Faint vertical guide from landing pad to hover ring
+        for t_ in theta[::8]:
+            ax.plot([HOVER_R*math.cos(t_)]*2, [HOVER_R*math.sin(t_)]*2,
+                    [0, TARGET_ALT], color="#22c55e", lw=0.4, alpha=0.25)
+        # Target star
+        ax.scatter([0], [0], [TARGET_ALT],
+                   color="#22c55e", s=90, marker="*", depthshade=False, zorder=9)
+
+        # Animated drone (drifts more in higher stages)
+        noise = {1: 0.06, 2: 0.30, 3: 0.55}.get(stage, 0.06)
+        drx = math.sin(t_now * 1.1) * noise
+        dry = math.cos(t_now * 0.8) * noise
+        drz = TARGET_ALT + math.sin(t_now * 2.0) * noise * 0.08
+
+        # Drone body — cross frame + rotor circles
+        arm = 0.38
+        for ang in [45, 135, 225, 315]:
+            rad = math.radians(ang)
+            ex, ey = drx + arm*math.cos(rad), dry + arm*math.sin(rad)
+            ax.plot([drx, ex], [dry, ey], [drz, drz], color="#7dd3fc", lw=2.5, zorder=10)
+            # Rotor circle
+            rr = np.linspace(0, 2*math.pi, 14)
+            ax.plot(ex + 0.14*np.cos(rr), ey + 0.14*np.sin(rr),
+                    [drz]*14, color="#60a5fa", lw=1.2, alpha=0.8, zorder=10)
+        ax.scatter([drx], [dry], [drz],
+                   color="#7dd3fc", s=60, depthshade=False, zorder=11)
+        # Blue line from drone down to landing pad
+        ax.plot([drx, 0], [dry, 0], [drz, TARGET_ALT],
+                color="#3b82f6", lw=1.0, alpha=0.35, ls="--")
+
+        # Wind arrows (stage 2+)
+        n_arrows = {1: 0, 2: 6, 3: 10}.get(stage, 0)
+        for i in range(n_arrows):
+            ang  = i*(2*math.pi/n_arrows) + t_now*0.22
+            r    = ROOM_W * 0.65
+            ox, oy = r*math.cos(ang), r*math.sin(ang)
+            ax.quiver(ox, oy, TARGET_ALT,
+                      -math.cos(ang)*0.8, -math.sin(ang)*0.8, 0,
+                      length=0.9, color="#f97316", alpha=0.75,
+                      arrow_length_ratio=0.35, linewidth=1.5)
+
+        # Walking user on the floor (stage 3)
+        if stage == 3:
+            ux = 2.2*math.sin(t_now*0.5)
+            uy = 2.2*math.cos(t_now*0.5)
+            # Person body (line)
+            ax.plot([ux, ux], [uy, uy], [0, 1.8], color="#e879f9", lw=3, alpha=0.9)
+            ax.scatter([ux], [uy], [2.0], color="#e879f9", s=80, depthshade=False)
+            # Dashed tracking line from drone down to user
+            ax.plot([drx, ux], [dry, uy], [drz, 2.0],
+                    color="#8b5cf6", lw=0.9, ls="--", alpha=0.5)
+
+        # Eval path overlay
+        if self._sub2_eval_path:
+            ep = self._sub2_eval_path
+            ax.plot([p[0] for p in ep], [p[1] for p in ep], [p[2] for p in ep],
+                    color="#4ade80", lw=2.2, alpha=0.9, zorder=12)
+            ax.scatter([ep[-1][0]], [ep[-1][1]], [ep[-1][2]],
+                       color="#4ade80", s=70, marker="D", depthshade=False, zorder=13)
+
+        # Stage / progress overlay text (top-left of 3D pane)
+        title_txt, desc_txt = STAGE_DESC.get(stage, ("", ""))
+        ax.text2D(0.02, 0.97, title_txt, transform=ax.transAxes,
+                  color="#60a5fa", fontsize=8, fontweight="bold", va="top")
+        ax.text2D(0.02, 0.86, desc_txt, transform=ax.transAxes,
+                  color="#94a3b8", fontsize=7, va="top")
+
+        if self._sub2_eval_result:
+            col = "#4ade80" if "PASS" in self._sub2_eval_result else "#f87171"
+            ax.text2D(0.5, 0.02, self._sub2_eval_result,
+                      transform=ax.transAxes, ha="center",
+                      color=col, fontsize=7, fontweight="bold")
+
+        ax.set_xlim(-ROOM_W, ROOM_W); ax.set_ylim(-ROOM_W, ROOM_W)
+        ax.set_zlim(0, CEIL_H)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_zticks([0, TARGET_ALT, CEIL_H])
+        ax.zaxis.set_ticklabels(["floor", f"{TARGET_ALT}m\nhover", f"{CEIL_H}m"],
+                                fontsize=6, color="#475569")
+        self._sub2_azim = (self._sub2_azim + 0.35) % 360
+        ax.view_init(elev=20, azim=self._sub2_azim)
+
+        # ── Reward curve (right) with progress info ───────────────────────────
+        ax_r = self._sub2_ax_reward
+        ax_r.cla()
+        _mpl_dark_axes(ax_r, "PPO Reward Curve", "Timestep", "Mean reward")
+
+        if not self._sub2_history:
+            ax_r.text(0.5, 0.55,
+                      "Press  'Start Training'  to begin\n\n"
+                      "3-stage curriculum:\n"
+                      "  Stage 1 (0–500k)  calm hover\n"
+                      "  Stage 2 (500k–1M) gusty wind\n"
+                      "  Stage 3 (1M–1.5M) walking user",
+                      ha="center", va="center", color="#64748b",
+                      transform=ax_r.transAxes, fontsize=8)
+        else:
+            stage_col = {1: "#3b82f6", 2: "#ec4899", 3: "#8b5cf6"}
+            pts = self._sub2_history[::max(1, len(self._sub2_history) // 400)]
+            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; ss = [p[2] for p in pts]
+
+            # Stage background bands
+            ax_r.axvspan(0,         500_000,   alpha=0.06, color="#3b82f6")
+            ax_r.axvspan(500_000,   1_000_000, alpha=0.06, color="#ec4899")
+            ax_r.axvspan(1_000_000, 1_500_000, alpha=0.06, color="#8b5cf6")
+
+            for i in range(1, len(pts)):
+                ax_r.plot([xs[i-1], xs[i]], [ys[i-1], ys[i]],
+                          color=stage_col.get(ss[i], "#60a5fa"), lw=1.6, solid_capstyle="round")
+
+            # Stage dividers
+            for xv in (500_000, 1_000_000):
+                ax_r.axvline(xv, color="#475569", ls="--", lw=0.9, alpha=0.5)
+
+            # Moving average (last 15 points)
+            if len(ys) >= 5:
+                win = min(15, len(ys))
+                ma  = np.convolve(ys, np.ones(win)/win, mode="valid")
+                xs_ma = xs[win-1:]
+                ax_r.plot(xs_ma, ma, color="#ffffff", lw=2.0, alpha=0.35, ls="-")
+
+            ax_r.set_xlim(0, max(self._sub2_total, xs[-1]))
+
+            # ETA + progress annotation
+            if self._sub2_start_time and self._sub2_step > 100:
+                elapsed   = time.time() - self._sub2_start_time
+                rate      = self._sub2_step / elapsed        # steps/sec
+                remaining = max(0, self._sub2_total - self._sub2_step)
+                eta_sec   = remaining / max(rate, 1)
+                eta_str   = (f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m"
+                             if eta_sec > 3600 else f"{int(eta_sec//60)}m {int(eta_sec%60)}s")
+                pct = 100 * self._sub2_step / self._sub2_total
+                ax_r.set_title(
+                    f"PPO Reward  ·  {pct:.0f}% done  ·  ~{eta_str} left  "
+                    f"·  {rate:.0f} steps/s",
+                    color="#94a3b8", fontsize=8, pad=4)
+
+            # Trend arrow
+            if len(ys) >= 20:
+                trend = ys[-1] - ys[max(0, len(ys)-20)]
+                t_col = "#22c55e" if trend > 0 else "#f97316"
+                t_sym = "↑ improving" if trend > 0 else "→ flat"
+                ax_r.text(0.98, 0.04, t_sym, transform=ax_r.transAxes,
+                          ha="right", color=t_col, fontsize=9, fontweight="bold")
+
+            ax_r.legend(handles=[
+                Patch(color="#3b82f6", label="S1 calm"),
+                Patch(color="#ec4899", label="S2 wind"),
+                Patch(color="#8b5cf6", label="S3 walk"),
+            ], facecolor="#0f172a", edgecolor=_MPL_EDGE, labelcolor="#94a3b8",
+               fontsize=7, loc="upper left")
+
+        self._sub2_canvas.draw_idle()
+
+    # ── Sub-4 controls & plot ─────────────────────────────────────────────────
+
+    def _start_sub4(self):
+        if self._sub4_training:
+            return
+        self._sub4_deltas.clear()
+        self._sub4_iters = 0
+        self._sub4_stop.clear()
+        self._sub4_thread = _MDPSolverWorker(self._sub4_queue, self._sub4_stop)
+        self._sub4_thread.start()
+        self._sub4_training = True
+        self._sub4_solve_btn.configure(state="disabled")
+        self._sub4_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
+                                       activebackground="#b91c1c")
+        self._sub4_status_var.set("Running value iteration…")
+
+    def _stop_sub4(self):
+        if not self._sub4_training:
+            return
+        self._sub4_stop.set()
+        self._sub4_stop_btn.configure(state="disabled")
+
+    def _update_sub4_plot(self):
+        try:
+            from sub4_nav.obstacle_env import (ROOM_W, ROOM_D, OBSTACLES, GOAL_XY,
+                                               N_LIDAR, LIDAR_R, NAV_ALT, WALL_H)
+        except ImportError:
+            ROOM_W, ROOM_D = 10.0, 8.0
+            OBSTACLES = [(-2.5,2.5,0.35),(-2.5,-2.5,0.35),(0,1.5,0.4),
+                         (0,-1.5,0.4),(0,0,0.3),(2.5,2.5,0.35),(2.5,-2.5,0.35)]
+            GOAL_XY = (4.5, 0.0); N_LIDAR = 8; LIDAR_R = 5.0
+            NAV_ALT = 1.5; WALL_H = 3.5
+
+        # ── 3D Obstacle Room ─────────────────────────────────────────────────
+        ax = self._sub4_ax_3d
+        ax.cla()
+        self._style_3d_ax(ax, "Obstacle Navigation Room")
+
+        hw, hd = ROOM_W / 2, ROOM_D / 2
+        theta = np.linspace(0, 2 * math.pi, 32)
+
+        # Room floor outline
+        ax.plot([-hw, hw, hw, -hw, -hw], [-hd, -hd, hd, hd, -hd],
+                [0]*5, color="#1e3a5f", lw=1.5)
+
+        # Vertical corner edges and top frame
+        for cx, cy in [(-hw,-hd),(-hw,hd),(hw,-hd),(hw,hd)]:
+            ax.plot([cx,cx],[cy,cy],[0,WALL_H], color="#1e3a5f", lw=1.0, alpha=0.5)
+        ax.plot([-hw,hw,hw,-hw,-hw],[-hd,-hd,hd,hd,-hd],
+                [WALL_H]*5, color="#1e3a5f", lw=0.7, alpha=0.35)
+
+        # Red obstacle cylinders
+        for ox, oy, r in OBSTACLES:
+            ax.plot(ox + r*np.cos(theta), oy + r*np.sin(theta),
+                    np.zeros(32), color="#dc2626", lw=1.5, alpha=0.9)
+            ax.plot(ox + r*np.cos(theta), oy + r*np.sin(theta),
+                    np.full(32, WALL_H), color="#dc2626", lw=0.8, alpha=0.4)
+            for t_ in theta[::4]:
+                ax.plot([ox+r*math.cos(t_)]*2, [oy+r*math.sin(t_)]*2,
+                        [0, WALL_H], color="#dc2626", lw=0.7, alpha=0.35)
+
+        # Goal zone ring at nav altitude
+        ax.plot(GOAL_XY[0] + 0.9*np.cos(theta), GOAL_XY[1] + 0.9*np.sin(theta),
+                np.full(32, NAV_ALT), color="#22c55e", lw=2.5)
+        ax.scatter([GOAL_XY[0]], [GOAL_XY[1]], [NAV_ALT],
+                   color="#22c55e", s=80, marker="*", depthshade=False, zorder=9)
+
+        # Start arrow
+        ax.quiver(-hw+0.3, 0, NAV_ALT, 0.9, 0, 0,
+                  length=1.0, color="#60a5fa", arrow_length_ratio=0.4, linewidth=2)
+
+        # Live drone + lidar + trail
+        if self._nav_viz:
+            viz   = self._nav_viz
+            dxy   = viz.get("drone_xy", [0.0, 0.0])
+            dx, dy = float(dxy[0]), float(dxy[1])
+            path  = viz.get("path", [])
+            if len(path) > 1:
+                ax.plot([p[0] for p in path], [p[1] for p in path],
+                        [NAV_ALT]*len(path), color="#3b82f6", lw=1.2, alpha=0.6)
+            for i, frac in enumerate(viz.get("lidar", [])):
+                ang = i * (2 * math.pi / N_LIDAR)
+                ex = dx + math.cos(ang) * frac * LIDAR_R
+                ey = dy + math.sin(ang) * frac * LIDAR_R
+                ax.plot([dx, ex], [dy, ey], [NAV_ALT, NAV_ALT],
+                        color="#f97316", lw=1.0, alpha=0.75)
+            ax.scatter([dx], [dy], [NAV_ALT],
+                       color="#7dd3fc", s=160, depthshade=False, zorder=10)
+        else:
+            ax.scatter([-hw+0.5], [0], [NAV_ALT], color="#7dd3fc", s=120,
+                       marker="o", depthshade=False)
+            ax.text2D(0.5, 0.05, "Click 'Train Navigation' — drone appears live",
+                      transform=ax.transAxes, ha="center", color="#475569", fontsize=7)
+
+        # Evaluation path overlay (bright green — best eval episode)
+        if self._nav_eval_path:
+            ep = self._nav_eval_path
+            ax.plot([p[0] for p in ep], [p[1] for p in ep],
+                    [NAV_ALT] * len(ep), color="#4ade80", lw=2.2, alpha=0.95, zorder=11)
+            ax.scatter([ep[-1][0]], [ep[-1][1]], [NAV_ALT],
+                       color="#4ade80", s=80, marker="D", depthshade=False, zorder=12)
+        if self._nav_eval_result:
+            ax.text2D(0.5, 0.01, self._nav_eval_result,
+                      transform=ax.transAxes, ha="center",
+                      color="#4ade80" if "PASS" in self._nav_eval_result else "#f87171",
+                      fontsize=7, fontweight="bold")
+
+        ax.set_xlim(-hw, hw); ax.set_ylim(-hd, hd); ax.set_zlim(0, WALL_H)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_zticks([0, NAV_ALT, WALL_H])
+        ax.zaxis.set_ticklabels(["0", f"{NAV_ALT}m", f"{WALL_H}m"],
+                                fontsize=7, color="#475569")
+        self._sub4_azim = (self._sub4_azim + 0.4) % 360
+        ax.view_init(elev=20, azim=self._sub4_azim)
+
+        # ── Nav reward curve (right) ──────────────────────────────────────────
+        ax_r = self._sub4_ax_reward
+        ax_r.cla()
+        _mpl_dark_axes(ax_r, "Nav PPO Reward Curve", "Timestep", "Mean reward")
+        if self._nav_history:
+            xs = [p[0] for p in self._nav_history]
+            ys = [p[1] for p in self._nav_history]
+            ax_r.plot(xs, ys, color="#14b8a6", lw=1.8)
+            ax_r.set_xlim(0, max(self._nav_total, xs[-1]))
+        else:
+            ax_r.text(0.5, 0.5, "Reward curve appears here\nduring training",
+                      ha="center", va="center", color="#475569",
+                      transform=ax_r.transAxes, fontsize=9)
+
+        self._sub4_canvas.draw_idle()
+
+    # ── Evaluation controls ───────────────────────────────────────────────────
+
+    def _run_sub2_eval(self):
+        if self._sub2_eval_active or self._sub2_training:
+            return
+        from sub2_flight.eval_worker import FlightEvalWorker
+        if not os.path.exists(_FlightTrainingWorker.OUTPUT_PATH + ".zip"):
+            self._sub2_status_var.set("No trained model found — train PPO first.")
+            return
+        self._sub2_eval_stop.clear()
+        self._sub2_eval_thread = FlightEvalWorker(self._sub2_eval_queue,
+                                                   self._sub2_eval_stop)
+        self._sub2_eval_thread.start()
+        self._sub2_eval_active = True
+        self._sub2_eval_path   = []
+        self._sub2_eval_result = ""
+        self._sub2_eval_btn.configure(state="disabled", text="Evaluating…")
+        self._sub2_status_var.set("Running 5 evaluation episodes…")
+
+    def _run_nav_eval(self):
+        if self._nav_eval_active or self._nav_training:
+            return
+        from sub4_nav.eval_worker import NavEvalWorker
+        if not os.path.exists(self._NAV_PATH):
+            self._nav_status_var.set("No trained model found — train navigation first.")
+            return
+        self._nav_eval_stop.clear()
+        self._nav_eval_thread = NavEvalWorker(self._nav_eval_queue,
+                                               self._nav_eval_stop)
+        self._nav_eval_thread.start()
+        self._nav_eval_active = True
+        self._nav_eval_path   = []
+        self._nav_eval_result = ""
+        self._nav_eval_btn.configure(state="disabled", text="Evaluating…")
+        self._nav_status_var.set("Running 5 evaluation episodes…")
+
+    # ── Sub-4 nav training controls ───────────────────────────────────────────
+
+    def _start_nav(self):
+        if self._nav_training:
+            return
+        from sub4_nav.nav_training_worker import NavTrainingWorker
+        try:
+            total = max(2048, int(self._nav_steps_var.get()))
+        except ValueError:
+            total = 500_000
+        self._nav_total = total
+        self._nav_history.clear()
+        self._nav_viz  = None
+        self._nav_step = 0
+        self._nav_stop.clear()
+        self._nav_thread = NavTrainingWorker(total, self._nav_queue, self._nav_stop)
+        self._nav_thread.start()
+        self._nav_training = True
+        self._nav_entry.configure(state="disabled")
+        self._nav_start_btn.configure(state="disabled")
+        self._nav_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
+                                     activebackground="#b91c1c")
+        self._nav_status_var.set("Training obstacle navigation…")
+
+    def _stop_nav(self):
+        if not self._nav_training:
+            return
+        self._nav_stop.set()
+        self._nav_stop_btn.configure(state="disabled")
+        self._nav_status_var.set("Stopping…")
+
+    # ── Main tick — drain queues, step Sub-1, refresh plots ──────────────────
+
+    def _tick(self):
+        if self.closed:
+            return
+
+        changed2 = changed4 = False
+
+        # Sub-1: one tracker frame per tick
+        sub1_was_running = self._sub1_running
+        self._sub1_step()
+        if sub1_was_running:
+            self._update_sub1_plot()
+
+        # Drain Sub-2 queue
+        while True:
+            try:
+                msg = self._sub2_queue.get_nowait()
+            except queue.Empty:
+                break
+            k = msg[0]
+            if k == "progress":
+                _, ts, stage, mr = msg
+                self._sub2_history.append((ts, mr, stage))
+                self._sub2_step = ts
+                changed2 = True
+            elif k in ("done", "stopped"):
+                _, _path, steps = msg
+                self._sub2_training = False
+                self._sub2_ready = os.path.exists(self._PPO_PATH)
+                self._sub2_entry.configure(state="normal")
+                self._sub2_start_btn.configure(state="normal")
+                self._sub2_stop_btn.configure(state="disabled", bg="#334155",
+                                               fg="#94a3b8", activebackground="#475569")
+                verb = "Done" if k == "done" else "Stopped"
+                self._sub2_status_var.set(
+                    f"{verb} — {steps:,} steps. {self._model_label(2)}")
+                changed2 = True
+            elif k == "error":
+                self._sub2_training = False
+                self._sub2_entry.configure(state="normal")
+                self._sub2_start_btn.configure(state="normal")
+                self._sub2_stop_btn.configure(state="disabled", bg="#334155",
+                                               fg="#94a3b8", activebackground="#475569")
+                self._sub2_status_var.set(f"Error: {msg[1][:120]}")
+                changed2 = True
+
+        # Drain Sub-4 queue
+        while True:
+            try:
+                msg = self._sub4_queue.get_nowait()
+            except queue.Empty:
+                break
+            k = msg[0]
+            if k == "iter":
+                _, itr, delta = msg
+                self._sub4_deltas.append(delta)
+                self._sub4_iters = itr
+                changed4 = True
+            elif k in ("done", "stopped"):
+                _, policy, _vals = msg
+                self._sub4_policy  = policy
+                self._sub4_training = False
+                self._sub4_ready   = os.path.exists(self._MDP_PATH)
+                self._sub4_solve_btn.configure(state="normal")
+                self._sub4_stop_btn.configure(state="disabled", bg="#334155",
+                                               fg="#94a3b8", activebackground="#475569")
+                verb = "Solved" if k == "done" else "Stopped"
+                self._sub4_status_var.set(
+                    f"{verb} — {self._sub4_iters} iterations. {self._model_label(4)}")
+                changed4 = True
+            elif k == "error":
+                self._sub4_training = False
+                self._sub4_solve_btn.configure(state="normal")
+                self._sub4_stop_btn.configure(state="disabled", bg="#334155",
+                                               fg="#94a3b8", activebackground="#475569")
+                self._sub4_status_var.set(f"Error: {msg[1][:120]}")
+                changed4 = True
+
+        # Drain nav queue
+        changed_nav = False
+        while True:
+            try:
+                msg = self._nav_queue.get_nowait()
+            except queue.Empty:
+                break
+            k = msg[0]
+            if k == "progress":
+                _, ts, mr, viz = msg
+                self._nav_history.append((ts, mr))
+                self._nav_step = ts
+                self._nav_viz  = viz
+                changed_nav = True
+            elif k in ("done", "stopped"):
+                _, _path, steps = msg
+                self._nav_training = False
+                self._nav_ready    = os.path.exists(self._NAV_PATH)
+                self._nav_entry.configure(state="normal")
+                self._nav_start_btn.configure(state="normal")
+                self._nav_stop_btn.configure(state="disabled", bg="#334155",
+                                              fg="#94a3b8", activebackground="#475569")
+                verb = "Done" if k == "done" else "Stopped"
+                self._nav_status_var.set(f"{verb} — {steps:,} steps. "
+                    + ("● model saved" if self._nav_ready else "○ partial"))
+                changed_nav = True
+            elif k == "error":
+                self._nav_training = False
+                self._nav_entry.configure(state="normal")
+                self._nav_start_btn.configure(state="normal")
+                self._nav_stop_btn.configure(state="disabled", bg="#334155",
+                                              fg="#94a3b8", activebackground="#475569")
+                self._nav_status_var.set(f"Error: {msg[1][:100]}")
+                changed_nav = True
+
+        # Always redraw 3D scenes so the auto-rotation stays alive
+        self._update_sub2_plot()
+        self._update_sub4_plot()
+
+        # Drain Sub-2 eval queue
+        while True:
+            try:
+                msg = self._sub2_eval_queue.get_nowait()
+            except queue.Empty:
+                break
+            k = msg[0]
+            if k == "eval_ep":
+                _, ep, rw, hr, passed, path = msg
+                if path:
+                    self._sub2_eval_path = path
+                pct = int(hr * 100)
+                mark = "✓" if passed else "✗"
+                self._sub2_status_var.set(
+                    f"Eval ep {ep}/5  {mark}  reward {rw:+.0f}  hover {pct}%  {self._sub2_eval_result}")
+            elif k == "eval_done":
+                _, rewards, passes, best_path = msg
+                self._sub2_eval_active = False
+                self._sub2_eval_path   = best_path
+                n_pass = sum(passes)
+                mean_r = float(np.mean(rewards)) if rewards else 0.0
+                verdict = "PASS ✓" if n_pass >= 3 else "FAIL ✗"
+                self._sub2_eval_result = (
+                    f"{verdict}  {n_pass}/5 episodes hovered  mean reward {mean_r:+.0f}")
+                self._sub2_status_var.set("Evaluation complete — " + self._sub2_eval_result)
+                label = f"Evaluate Model  ({n_pass}/5 ✓)" if n_pass >= 3 else f"Evaluate Model  ({n_pass}/5 ✗)"
+                self._sub2_eval_btn.configure(state="normal", text=label)
+            elif k == "eval_error":
+                self._sub2_eval_active = False
+                self._sub2_eval_btn.configure(state="normal", text="Evaluate Model")
+                self._sub2_status_var.set(f"Eval error: {msg[1][:80]}")
+
+        # Drain Nav eval queue
+        while True:
+            try:
+                msg = self._nav_eval_queue.get_nowait()
+            except queue.Empty:
+                break
+            k = msg[0]
+            if k == "eval_ep":
+                _, ep, rw, reached, steps, path = msg
+                if path:
+                    self._nav_eval_path = path
+                mark = "✓ GOAL" if reached else "✗ miss"
+                self._nav_status_var.set(
+                    f"Eval ep {ep}/5  {mark}  reward {rw:+.0f}  {steps} steps")
+            elif k == "eval_done":
+                _, rewards, successes, best_path = msg
+                self._nav_eval_active = False
+                self._nav_eval_path   = best_path
+                n_pass  = sum(successes)
+                mean_r  = float(np.mean(rewards)) if rewards else 0.0
+                verdict = "PASS ✓" if n_pass >= 3 else "FAIL ✗"
+                self._nav_eval_result = (
+                    f"{verdict}  {n_pass}/5 episodes reached goal  mean reward {mean_r:+.0f}")
+                self._nav_status_var.set("Evaluation complete — " + self._nav_eval_result)
+                label = f"Evaluate Model  ({n_pass}/5 ✓)" if n_pass >= 3 else f"Evaluate Model  ({n_pass}/5 ✗)"
+                self._nav_eval_btn.configure(state="normal", text=label)
+            elif k == "eval_error":
+                self._nav_eval_active = False
+                self._nav_eval_btn.configure(state="normal", text="Evaluate Model")
+                self._nav_status_var.set(f"Eval error: {msg[1][:80]}")
+
+        self._gate_var.set(self._gate_text())
+        self.window.after(200, self._tick)
+
+    # _do_launch removed — hub is training-only; sim launch uses main Launcher
+
+    def close(self):
+        self._sub2_stop.set()
+        self._sub4_stop.set()
+        self._nav_stop.set()
+        self._sub2_eval_stop.set()
+        self._nav_eval_stop.set()
+        if self._sub1_perc_env is not None:
+            try:
+                self._sub1_perc_env.close()
+            except Exception:
+                pass
+        self.closed = True
+        try:
+            self.window.destroy()
+        except tk.TclError:
+            pass
+
+
 class ScenarioLauncher:
     def __init__(self, default_duration=120.0):
         self.selection = None
@@ -1242,6 +2742,8 @@ class ScenarioLauncher:
         self.scenario_cards = {}
         self.training_status_var = None
         self.training_window = None
+        self.flight_training_window = None
+        self.training_hub = None
 
         self.root = tk.Tk()
         self.root.title("SkyShade Launcher")
@@ -1534,7 +3036,7 @@ class ScenarioLauncher:
             )
 
         self.training_status_var = tk.StringVar(
-            value="Camera trainer is ready here. Press Open Camera to see the live Sub-1 lock check."
+            value="Click any subsystem card to open the Training Grounds hub — train Sub-2 PPO and Sub-4 MDP before launching."
         )
         tk.Label(
             panel,
@@ -1591,56 +3093,44 @@ class ScenarioLauncher:
             wraplength=360 if not compact else 255,
         ).grid(row=2, column=0, sticky="ew", pady=(3, 0))
 
-        button_text = "Open" if key == "camera" else "Focus"
+        _BTN = {
+            "camera":      ("Calibrate",  "#166534", "#dcfce7"),
+            "flight":      ("Train PPO",  "#1e3a8a", "#bfdbfe"),
+            "weather":     ("View SVM",   "#1e293b", "#94a3b8"),
+            "safety":      ("Solve MDP",  "#4c1d95", "#ddd6fe"),
+            "environment": ("Select",     "#1e293b", "#94a3b8"),
+        }
+        btn_label, btn_bg, btn_fg = _BTN.get(key, ("Open", "#0f172a", "#e0f2fe"))
         tk.Button(
             card,
-            text=button_text,
+            text=btn_label,
             command=lambda selected=key: self._open_training_ground(selected),
-            bg="#0f172a",
-            fg="#e0f2fe",
-            activebackground="#1e293b",
+            bg=btn_bg,
+            fg=btn_fg,
+            activebackground="#334155",
             activeforeground="#ffffff",
             relief="flat",
             font=("Arial", 9, "bold"),
-            padx=8,
-            pady=5,
+            padx=10,
+            pady=6,
         ).grid(row=0, column=1, rowspan=3, sticky="e", padx=(8, 0))
 
+    def _open_training_hub(self, tab_idx: int = 0):
+        """Open (or focus) the unified TrainingGroundsHub and select a tab."""
+        if self.training_hub is None or self.training_hub.closed:
+            self.training_hub = TrainingGroundsHub(self.root)
+        else:
+            self.training_hub.window.lift()
+        self.training_hub.select_tab(tab_idx)
+
+
+
     def _open_training_ground(self, key):
-        messages = {
-            "flight": (
-                "Sub-2 Flight selected: Q-learning is the reinforcement-learning module. "
-                "I set Flight to Q-learning; launch the sim to watch the learned policy run."
-            ),
-            "weather": (
-                "Sub-3 Weather selected: this is supervised SVM classification for umbrella decisions."
-            ),
-            "safety": (
-                "Sub-4 Safety selected: this uses an MDP policy table for battery and navigation overrides."
-            ),
-            "environment": (
-                "Environment selected: Building District is the stress scene for roads, buildings, and pedestrians."
-            ),
-        }
+        tab_map = {"camera": 0, "flight": 1, "safety": 2}
+        self._open_training_hub(tab_map.get(key, 0))
 
-        if key == "camera":
-            if self.training_window is None or self.training_window.closed:
-                self.training_window = CameraTrainingWindow(self.root)
-            else:
-                self.training_window.window.lift()
-            if self.training_status_var is not None:
-                self.training_status_var.set(
-                    "Sub-1 Camera is open. It should show LOCKED when confidence stays high and marker error is under 18px."
-                )
-            return
-
-        if key == "flight":
-            self.flight_var.set("q")
-        elif key == "environment":
+        if key == "environment":
             self._set_scenario(SCENARIO_BUILDINGS)
-
-        if self.training_status_var is not None:
-            self.training_status_var.set(messages[key])
 
     def _draw_launcher_hero(self, canvas):
         canvas.update_idletasks()
@@ -1797,6 +3287,19 @@ class ScenarioLauncher:
                 if isinstance(child, tk.Label):
                     child.configure(bg="#10243a" if active else "#111827")
 
+    def _missing_models(self) -> list:
+        """Return list of subsystem names whose model files are absent."""
+        missing = []
+        ppo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "models", "ppo_flight_v1.zip")
+        mdp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "models", "policy_table_v1.npy")
+        if not os.path.exists(ppo_path):
+            missing.append("Sub-2 Flight PPO (ppo_flight_v1.zip)")
+        if not os.path.exists(mdp_path):
+            missing.append("Sub-4 Nav Safety (policy_table_v1.npy)")
+        return missing
+
     def _launch(self):
         try:
             duration = float(self.duration_var.get())
@@ -1805,6 +3308,19 @@ class ScenarioLauncher:
         except ValueError:
             self.error_var.set("Enter a positive duration in seconds.")
             return
+
+        missing = self._missing_models()
+        if missing:
+            msg = ("The following subsystems are not trained:\n\n  • "
+                   + "\n  • ".join(missing)
+                   + "\n\nOpen Training Grounds to train them, or launch anyway?")
+            proceed = tk_messagebox.askyesno(
+                "Models not trained", msg,
+                icon="warning", default="no", parent=self.root,
+            )
+            if not proceed:
+                self._open_training_hub(1 if "Sub-2" in missing[0] else 2)
+                return
 
         self.selection = {
             "scenario": self.scenario_var.get(),

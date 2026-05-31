@@ -1,42 +1,46 @@
 # Sub-4: Navigation and Safety
 
-## Responsibility
+Sub-4 has two independent policies that run together:
+
+| Policy | Algorithm | Model file | Purpose |
+|---|---|---|---|
+| **Battery Safety** | MDP value iteration | `models/policy_table_v1.npy` | Override flight when battery / distance is critical |
+| **Obstacle Navigation** | PPO (continuous) | `models/ppo_nav_v1.zip` | Navigate a room with obstacles using 8 lidar rays |
+
+---
+
+## Battery Safety — MDP policy
+
+### Responsibility
 
 Monitor battery level and distance from home. Issue override commands to Sub-2 when continuing normal flight would be unsafe.
 
----
+### How it works
 
-## How it works
+Every 200 ms the controller:
+1. Reads battery percentage and distance from home
+2. Discretises both into buckets → state index (0–11)
+3. Looks up the pre-computed policy table → action
+4. Publishes `CONTINUE`, `RTH`, or `LAND_NOW` to `/skyshade/nav_override`
 
-1. Every 200 ms (5 Hz), battery percentage and distance from the home origin are read
-2. Both are discretised into buckets to produce a state index
-3. The pre-computed MDP policy table is looked up for that state
-4. The resulting action (`CONTINUE`, `RTH`, or `LAND_NOW`) is published to `/skyshade/nav_override`
-5. Sub-2 checks this topic before each PID calculation and redirects its target accordingly
+### State space (12 states)
 
----
-
-## State space (12 states)
-
-```python
-battery_buckets  = [HIGH, MEDIUM, LOW, CRITICAL]   # 4 levels
-distance_buckets = [NEAR, MID, FAR]                # Distance to home origin
-# 4 × 3 = 12 total states
+```
+battery_buckets  = [HIGH >75%, MEDIUM 50–75%, LOW 25–50%, CRITICAL <25%]
+distance_buckets = [NEAR <20m, MID 20–50m, FAR >50m]
+12 total = 4 × 3
 ```
 
----
+### Policy table (learned result)
 
-## Actions
+| Battery | NEAR | MID | FAR |
+|---|---|---|---|
+| HIGH | RTH | RTH | RTH |
+| MEDIUM | RTH | RTH | RTH |
+| LOW | RTH | RTH | RTH |
+| CRITICAL | LAND | LAND | LAND |
 
-| Action | Behaviour |
-|---|---|
-| `CONTINUE` | Pass control to Sub-2; drone follows user |
-| `RTH` | Sub-2 navigates to home origin at target altitude |
-| `LAND_NOW` | Sub-2 descends to 0.3 m and holds |
-
----
-
-## Reward structure
+### Reward structure
 
 ```python
 REWARD_SAFE_COMPLETION = +100
@@ -45,42 +49,116 @@ REWARD_CRASH           = -100
 REWARD_BATTERY_EMPTY   = -100
 ```
 
----
+### Solver
 
-## Solver configuration
+Value iteration with γ = 0.95, convergence threshold Δ < 1e-6. Converges in ~18 iterations in under 1 ms. The Training Grounds hub shows the convergence curve (max Bellman Δ per iteration) as it solves.
 
-```python
-GAMMA             = 0.95
-CONVERGENCE_DELTA = 1e-6   # Stop when max Bellman update < this
+```bash
+python sub4_nav/solve_mdp.py --gamma 0.95 --output models/policy_table_v1.npy
 ```
 
-The policy table is solved offline before the simulation runs. Runtime lookup is O(1).
+---
+
+## Obstacle Navigation — PPO policy
+
+### Responsibility
+
+Navigate the drone from the west end of a 10 × 8 m room to the east-side goal zone, dodging 7 cylindrical pillars using 8 lidar (distance) sensors.
+
+### Environment — `ObstacleNavEnv`
+
+File: `sub4_nav/obstacle_env.py`
+
+#### Room layout
+
+The drone flies at a fixed altitude of **1.5 m** inside a 10 m × 8 m × 3.5 m walled room.
+Seven red cylindrical pillars (radius 0.3–0.4 m) are placed in two staggered columns across the room.
+The drone starts at the west end and must reach a 0.9 m-radius goal zone on the east side.
+
+#### Observation space (12D float32)
+
+| Index | Variable | Description |
+|---|---|---|
+| 0–7 | `lidar[0..7]` | 8 ray hit fractions ∈ [0, 1]; 0 = obstacle at drone, 1 = open at 5 m range |
+| 8–9 | `dx, dy` | Drone − goal vector (m), clipped ±12 |
+| 10–11 | `vx, vy` | Drone lateral velocity (m/s), clipped ±5 |
+
+The 8 lidar rays are cast at 45° increments (0°, 45°, 90° … 315°). A hit fraction of 0.4 means an obstacle is 2 m away (40% of 5 m max range).
+
+#### Action space (2D continuous, ±2 m/s)
+
+`[vx_cmd, vy_cmd]` — lateral velocity setpoints converted by the same inner P-controller used in Sub-2.
+
+#### Reward
+
+```python
+reward = (prev_dist - dist) × 8.0   # progress toward goal
+       - 0.15                         # step penalty
+       + 200.0   (on goal arrival)    # completion bonus
+       - 50.0    (on obstacle hit)    # collision penalty
+       - 30.0    (on wall hit)        # boundary penalty
+```
+
+### PPO hyperparameters
+
+```python
+PPO("MlpPolicy", env,
+    n_steps=2048, batch_size=64, n_epochs=10,
+    gamma=0.995, gae_lambda=0.95,
+    learning_rate=3e-4, ent_coef=0.02,
+    policy_kwargs={"net_arch": [256, 256]})
+```
 
 ---
 
-## Known design issue — RTH bias
+## Training from the Training Grounds hub
 
-Because `CONTINUE` never earns `REWARD_SAFE_COMPLETION`, value iteration assigns the highest value to `RTH` in almost all states. In the integrated simulation this is patched by suppressing `RTH` while battery > 50%, so the drone only triggers the override when battery is genuinely low.
+Open the launcher → click **Solve MDP** → opens the Sub-4 Nav Safety tab.
 
-A future fix would restructure the reward function so `CONTINUE` accumulates positive reward for successful user-following, making the MDP balance safety against mission performance rather than always preferring RTH.
+The 3D room visualisation auto-rotates and shows:
+- **Wireframe room** with floor grid, 4 walls, ceiling frame
+- **Red cylindrical pillars** with bottom/top circles and vertical surface lines
+- **Green goal zone** ring at flight altitude (east end), green star marks the centre
+- **Blue arrow** at the start position (west end)
+- Once training begins: **live blue drone sphere** + **8 orange lidar rays** fanning out from the drone — the rays shorten as the drone approaches obstacles, showing active sensing
+- **Blue position trail** of recent drone XY positions
+- **Teal reward curve** on the right showing training progress
 
----
+Two separate controls:
 
-## Validation target
+1. **Train Navigation** (teal) — starts PPO obstacle-avoidance training (default 500 k steps, ~20–40 min depending on hardware)
+2. **Solve Battery-Safety MDP** (purple) — runs value iteration, completes in under 1 second
 
-| Metric | Target |
-|---|---|
-| Scripted scenarios passed | 50 / 50 |
-| RTH trigger latency | Within 1 decision tick of low-battery injection |
+### CLI usage
+
+```bash
+# Battery safety MDP
+python sub4_nav/solve_mdp.py --output models/policy_table_v1.npy
+
+# Obstacle navigation PPO  
+python -m sub4_nav.train_nav  # (or use the Training Grounds hub)
+```
+
+### Evaluating before launch
+
+Click **Evaluate Model** in the Sub-4 tab. Runs 5 deterministic episodes and:
+- Reports per-episode: `✓ GOAL reached`, reward, steps taken
+- Draws the best-episode path as a **bright green trail** through the 3D obstacle room
+- Reports `PASS ✓ 3/5 episodes reached goal` — pass threshold is ≥3/5 completions
 
 ---
 
 ## Relevant files
 
-- `sub4_nav/mdp.py` — MDP state/action/reward definition
-- `sub4_nav/solve_mdp.py` — offline value iteration solver
-- `sub4_nav/policy_table.py` — runtime policy lookup
-- `sub4_nav/test_nav_safety.py` — 50-scenario test suite
-- `models/policy_table_v1.npy` — solved policy table
-- `convergence_curve.png` — value iteration convergence plot
-- `ros2_ws/src/skyshade/skyshade/nav_safety_node.py` — ROS 2 wrapper
+| File | Purpose |
+|---|---|
+| `sub4_nav/mdp.py` | MDP state/action/reward/transition definitions |
+| `sub4_nav/solve_mdp.py` | CLI value-iteration solver |
+| `sub4_nav/training_worker.py` | Background MDP solver thread (used by hub) |
+| `sub4_nav/policy_table.py` | Runtime battery-safety policy lookup |
+| `sub4_nav/obstacle_env.py` | PyBullet 10×8 m obstacle navigation environment |
+| `sub4_nav/nav_training_worker.py` | Background PPO nav training thread |
+| `sub4_nav/eval_worker.py` | 5-episode nav evaluation worker |
+| `sub4_nav/test_nav_safety.py` | Battery-safety unit tests |
+| `models/policy_table_v1.npy` | Solved MDP battery-safety policy |
+| `models/ppo_nav_v1.zip` | Trained PPO obstacle navigation model |

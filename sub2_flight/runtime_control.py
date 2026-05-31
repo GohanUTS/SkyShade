@@ -17,7 +17,7 @@ from sub2_flight.env.hover_env import (
     action_to_force,
     discretize_state,
 )
-from sub2_flight.policy import ACTION_NAMES, FlightPolicy, PIDFlightPolicy
+from sub2_flight.policy import ACTION_NAMES, FlightPolicy, PIDFlightPolicy, PPOFlightPolicy
 
 
 @dataclass
@@ -87,27 +87,37 @@ def obstacle_avoidance_force(
 
 
 class RuntimeFlightController:
-    """Runtime adapter for learned Q-flight control with PID fallback."""
+    """Runtime adapter — PPO primary, Q-table legacy fallback, PID final fallback."""
 
     def __init__(self, mode: str = "q"):
         self.requested_mode = "q" if str(mode).lower().startswith("q") else "pid"
         self.pid = PIDFlightPolicy()
+        self.ppo_policy = None
         self.q_policy = None
         self.fallback_reason = None
 
         if self.requested_mode == "q":
+            # Try PPO first (current primary policy)
             try:
-                self.q_policy = FlightPolicy()
-            except (FileNotFoundError, ValueError) as exc:
-                self.fallback_reason = str(exc)
+                self.ppo_policy = PPOFlightPolicy()
+            except (FileNotFoundError, ImportError, Exception) as exc:
+                # Fall back to legacy Q-table
+                try:
+                    self.q_policy = FlightPolicy()
+                except (FileNotFoundError, ValueError) as exc2:
+                    self.fallback_reason = str(exc2)
 
     @property
     def using_q(self) -> bool:
-        return self.q_policy is not None
+        return self.ppo_policy is not None or self.q_policy is not None
 
     @property
     def label(self) -> str:
-        return "Q-RL" if self.using_q else "PID"
+        if self.ppo_policy is not None:
+            return "PPO"
+        if self.q_policy is not None:
+            return "Q-RL"
+        return "PID"
 
     def reset(self):
         self.pid.reset()
@@ -143,16 +153,41 @@ class RuntimeFlightController:
         dt: float,
     ) -> FlightControlResult:
         """Compute corrective force, excluding constant hover thrust."""
+        from sub2_flight.env.ppo_hover_env import OBS_LOW, OBS_HIGH
+
         drone_pos = np.array(drone_pos, dtype=float)
         drone_vel = np.array(drone_vel, dtype=float)
         target = self.target_for_override(nav_override, drone_pos, user_pos, user_velocity)
 
-        if self.using_q and nav_override != "LAND_NOW":
+        # ── PPO path ──────────────────────────────────────────────────────────
+        if self.ppo_policy is not None and nav_override != "LAND_NOW":
+            target_3d = np.array([target[0], target[1], TARGET_ALTITUDE], dtype=float)
+            delta = drone_pos - target_3d
+            obs = np.array([
+                delta[0], delta[1], delta[2],
+                drone_vel[0], drone_vel[1], drone_vel[2],
+                float(np.clip(wind_speed / 5.0, 0.0, 1.0)),
+            ], dtype=np.float32)
+            obs = np.clip(obs, OBS_LOW, OBS_HIGH)
+
+            force = self.ppo_policy.compute_force(obs, drone_vel)
+
+            dist3d = float(np.linalg.norm(drone_pos - target_3d))
+            reward = 5.0 if dist3d <= HOVER_RADIUS_M else max(-5.0, -dist3d)
+
+            return FlightControlResult(
+                force=force,
+                target=target_3d,
+                controller="PPO",
+                action="PPO_VEL",
+                reward=reward,
+                using_q=True,
+            )
+
+        # ── Legacy Q-table path ───────────────────────────────────────────────
+        if self.q_policy is not None and nav_override != "LAND_NOW":
             state = discretize_state(
-                drone_pos,
-                drone_vel,
-                [target[0], target[1], 0.0],
-                wind_speed,
+                drone_pos, drone_vel, [target[0], target[1], 0.0], wind_speed,
             )
             action = self.q_policy.select_action(state)
             force = action_to_force(action)
@@ -172,6 +207,7 @@ class RuntimeFlightController:
                 using_q=True,
             )
 
+        # ── PID fallback ──────────────────────────────────────────────────────
         force = self.pid.compute_force(drone_pos, drone_vel, target, dt)
         return FlightControlResult(
             force=force,

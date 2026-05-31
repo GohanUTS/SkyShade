@@ -1,12 +1,13 @@
 """
 Sub-2 Flight — flight policy implementations.
 
-FlightPolicy    : greedy policy backed by a pre-trained Q-table.
+PPOFlightPolicy : continuous PPO policy (velocity-setpoint → inner P → force).
+FlightPolicy    : legacy greedy policy backed by a pre-trained Q-table.
 PIDFlightPolicy : continuous fallback/baseline hover controller.
 
-The Q-learning environment now includes velocity buckets in its state, so the
-learned table can brake instead of flying through the hover target. PID remains
-available as a fallback and comparison baseline.
+PPO is now the primary learned policy.  FlightPolicy (Q-table) is kept as a
+legacy fallback and for the existing test suite.  PID remains the final
+fallback when no model file is present.
 """
 
 import os
@@ -20,6 +21,52 @@ ACTION_NAMES = ["MOVE_NORTH", "MOVE_SOUTH", "MOVE_EAST", "MOVE_WEST",
 DEFAULT_MODEL_PATH = os.path.join(
     os.path.dirname(__file__), "..", "models", "qtable_v1.npy"
 )
+
+DEFAULT_PPO_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "models", "ppo_flight_v1"
+)
+
+
+class PPOFlightPolicy:
+    """Continuous hover policy driven by a trained PPO network.
+
+    The network outputs a 3-D velocity setpoint [vx_des, vy_des, vz_des].
+    An inner proportional controller converts that to a corrective force:
+        force = VELOCITY_GAIN × (v_des − v_current)
+    which is what the simulator applies each tick alongside hover thrust.
+    """
+
+    VELOCITY_GAIN = 8.0
+    FORCE_CLIP    = 12.0
+
+    def __init__(self, model_path: str = DEFAULT_PPO_PATH):
+        try:
+            from stable_baselines3 import PPO as _PPO
+        except ImportError as exc:
+            raise ImportError(
+                "stable_baselines3 is required for PPOFlightPolicy"
+            ) from exc
+
+        # SB3 auto-appends .zip; accept paths with or without it
+        path = model_path.removesuffix(".zip")
+        zip_path = path + ".zip"
+        if not os.path.exists(zip_path) and not os.path.exists(path):
+            raise FileNotFoundError(
+                f"PPO model not found at {zip_path}. "
+                "Train first with sub2_flight/train_ppo.py or the training window."
+            )
+        self._model = _PPO.load(path)
+
+    def select_action(self, obs: np.ndarray) -> np.ndarray:
+        """Return velocity setpoint [vx_des, vy_des, vz_des] (m/s)."""
+        action, _ = self._model.predict(obs, deterministic=True)
+        return np.asarray(action, dtype=float)
+
+    def compute_force(self, obs: np.ndarray, drone_vel: np.ndarray) -> np.ndarray:
+        """Full pipeline: obs → velocity setpoint → corrective force (N, 3D)."""
+        vel_sp = self.select_action(obs)
+        force  = self.VELOCITY_GAIN * (vel_sp - drone_vel)
+        return np.clip(force, -self.FORCE_CLIP, self.FORCE_CLIP)
 
 
 class FlightPolicy:
