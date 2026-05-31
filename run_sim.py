@@ -12,7 +12,8 @@ randomly switch between cloudy periods, light rain, and full rain.
 Battery drains and triggers the Sub-4 safety override.
 
 Usage:
-    python run_sim.py [--duration 120] [--no-gui]
+    python run_sim.py [--duration 120] [--no-gui] [--flight pid|q]
+                      [--demo-low-battery]
 """
 
 import argparse
@@ -43,7 +44,7 @@ from sub1_perception.tracker import (
     Tracker, CAMERA_RES, CAMERA_FOV, CONFIDENCE_THRESH,
     HSV_LOWER, HSV_UPPER, HSV_LOWER2, HSV_UPPER2, MIN_CONTOUR_AREA,
 )
-from sub2_flight.policy import PIDFlightPolicy
+from sub2_flight.runtime_control import RuntimeFlightController, obstacle_avoidance_force
 from sub2_flight.env.hover_env import (
     TARGET_ALTITUDE, HOVER_FORCE_N, DRONE_MASS_KG,
     SIM_TIMESTEP, STEPS_PER_ACTION, LINEAR_DAMPING,
@@ -54,6 +55,10 @@ from sub4_nav.mdp import ACTION_NAMES
 
 CONTROL_HZ         = 30
 BATTERY_DRAIN_RATE = 0.5    # % per second
+LOW_BATTERY_DEMO_START = 10.0
+LOW_BATTERY_DEMO_DRAIN_RATE = 1.0
+RUNTIME_PID_DAMPING = 0.5
+WIND_FORCE_SCALE    = 0.35   # N per m/s of weather wind pushed on the drone
 USER_WALK_SPEED    = 0.3    # rad/s for figure-8
 HOVER_RADIUS       = 0.5    # m
 WEATHER_MIN_SECONDS = 8.0
@@ -73,7 +78,6 @@ SCENARIO_DESCRIPTIONS = {
 AVOIDANCE_RADIUS = 0.75
 AVOIDANCE_GAIN = 4.5
 AVOIDANCE_MAX_FORCE = 5.5
-FOLLOW_LEAD_SECONDS = 0.85
 FOLLOW_LEAD_MAX_METERS = 1.05
 GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
@@ -420,47 +424,6 @@ def scenario_user_position(scenario, t_wall):
     return figure8(t_wall * USER_WALK_SPEED)
 
 
-def obstacle_avoidance_force(drone_pos, obstacles):
-    if not obstacles:
-        return np.zeros(3, dtype=float)
-
-    force_xy = np.zeros(2, dtype=float)
-    drone_xy = np.array(drone_pos[:2], dtype=float)
-    nearby = []
-    for obstacle in obstacles:
-        away = drone_xy - obstacle["position"]
-        distance = float(np.linalg.norm(away))
-        clearance = distance - obstacle["radius"]
-        nearby.append((clearance, distance, away, obstacle))
-
-    for clearance, distance, away, obstacle in sorted(nearby, key=lambda item: item[0])[:6]:
-        if distance < 1e-5 or clearance >= AVOIDANCE_RADIUS:
-            continue
-
-        direction = away / distance
-        proximity = (AVOIDANCE_RADIUS - clearance) / AVOIDANCE_RADIUS
-        strength = AVOIDANCE_GAIN * proximity * proximity
-        force_xy += direction * strength
-
-    magnitude = float(np.linalg.norm(force_xy))
-    if magnitude > AVOIDANCE_MAX_FORCE:
-        force_xy *= AVOIDANCE_MAX_FORCE / magnitude
-
-    return np.array([force_xy[0], force_xy[1], 0.0], dtype=float)
-
-
-def lead_follow_target(user_pos, user_velocity):
-    lead = np.array(user_velocity[:2], dtype=float) * FOLLOW_LEAD_SECONDS
-    lead_norm = float(np.linalg.norm(lead))
-    if lead_norm > FOLLOW_LEAD_MAX_METERS:
-        lead *= FOLLOW_LEAD_MAX_METERS / lead_norm
-    return np.array([
-        user_pos[0] + lead[0],
-        user_pos[1] + lead[1],
-        TARGET_ALTITUDE,
-    ])
-
-
 def predictive_gimbal_target(user_pos, user_velocity, confidence, t_wall):
     lead = np.array(user_velocity[:2], dtype=float) * GIMBAL_LOOKAHEAD_SECONDS
     lead_norm = float(np.linalg.norm(lead))
@@ -514,7 +477,7 @@ def create_drone(phys, start_xy=None):
     )
     p.changeDynamics(
         drone_id, -1, mass=DRONE_MASS_KG,
-        linearDamping=LINEAR_DAMPING, angularDamping=0.9,
+        linearDamping=RUNTIME_PID_DAMPING, angularDamping=0.9,
         physicsClientId=phys,
     )
 
@@ -621,12 +584,13 @@ class ScenarioLauncher:
         self.root = tk.Tk()
         self.root.title("SkyShade Launcher")
         self.root.configure(bg="#0b1120")
-        self.root.geometry("760x520")
+        self.root.geometry("760x560")
         self.root.minsize(680, 460)
         self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
 
         self.scenario_var = tk.StringVar(value=SCENARIO_PARK)
+        self.flight_var = tk.StringVar(value="pid")
         self.duration_var = tk.StringVar(value=str(int(default_duration)))
         self.gui_var = tk.BooleanVar(value=True)
         self.error_var = tk.StringVar(value="")
@@ -694,6 +658,35 @@ class ScenarioLauncher:
             anchor="w",
         ).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
+        tk.Label(
+            options,
+            text="Flight",
+            fg="#cbd5e1",
+            bg="#111c2e",
+            font=("Arial", 10, "bold"),
+            anchor="w",
+        ).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(10, 0))
+
+        flight_row = tk.Frame(options, bg="#111c2e")
+        flight_row.grid(row=1, column=1, columnspan=2, sticky="w", pady=(10, 0))
+        for col, (value, label) in enumerate((("pid", "PID"), ("q", "Q-learning"))):
+            tk.Radiobutton(
+                flight_row,
+                text=label,
+                value=value,
+                variable=self.flight_var,
+                indicatoron=False,
+                bg="#0f172a",
+                fg="#f8fafc",
+                selectcolor="#075985",
+                activebackground="#1e293b",
+                activeforeground="#ffffff",
+                relief="flat",
+                font=("Arial", 10, "bold"),
+                padx=10,
+                pady=6,
+            ).grid(row=0, column=col, sticky="w", padx=(0, 8))
+
         tk.Checkbutton(
             options,
             text="Show PyBullet GUI and dashboard",
@@ -705,7 +698,7 @@ class ScenarioLauncher:
             activeforeground="#f8fafc",
             font=("Arial", 10),
             anchor="w",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         tk.Label(
             frame,
@@ -796,6 +789,7 @@ class ScenarioLauncher:
 
         self.selection = {
             "scenario": self.scenario_var.get(),
+            "flight": self.flight_var.get(),
             "duration": duration,
             "gui": bool(self.gui_var.get()),
         }
@@ -814,6 +808,7 @@ def choose_launch_settings(default_duration=120.0):
     if tk is None:
         return {
             "scenario": SCENARIO_PARK,
+            "flight": "pid",
             "duration": default_duration,
             "gui": True,
         }
@@ -824,6 +819,7 @@ def choose_launch_settings(default_duration=120.0):
         print(f"Launcher unavailable: {exc}")
         return {
             "scenario": SCENARIO_PARK,
+            "flight": "pid",
             "duration": default_duration,
             "gui": True,
         }
@@ -837,6 +833,8 @@ def launch_sim_process(settings):
         settings["scenario"],
         "--duration",
         str(settings["duration"]),
+        "--flight",
+        settings.get("flight", "pid"),
     ]
     if not settings["gui"]:
         cmd.append("--no-gui")
@@ -885,6 +883,8 @@ class TelemetryWindow:
             "FAR": ("#7f1d1d", "#fee2e2"),
             "ACTIVE": ("#075985", "#e0f2fe"),
             "IDLE": ("#334155", "#e2e8f0"),
+            "GAIN": ("#064e3b", "#d1fae5"),
+            "COST": ("#7f1d1d", "#fee2e2"),
         }
 
         if tk is None:
@@ -931,6 +931,7 @@ class TelemetryWindow:
         for key, label_text in [
             ("time", "Run time"),
             ("nav", "Drone action"),
+            ("controller", "Flight controller"),
             ("hover_error", "Distance from user"),
             ("tracking", "Camera lock"),
         ]:
@@ -948,6 +949,7 @@ class TelemetryWindow:
         row = self._section(body, row, "Behind The Scenes")
         for key, label_text in [
             ("location_summary", "Positions"),
+            ("flight_reward", "Sub-2 reward"),
             ("subsystem_summary", "AI modules"),
         ]:
             row = self._metric(body, row, key, label_text)
@@ -1631,6 +1633,7 @@ class ConsoleTelemetry:
 def _telemetry_payload(
     t_wall, battery_pct, nav_override, umbrella_cmd, confidence,
     err_xy, drone_pos, user_pos, user_offset, weather,
+    flight_mode="PID", flight_action="PID_FORCE", flight_reward=None,
 ):
     lux = weather["lux"]
     rain = weather["rain"]
@@ -1657,8 +1660,13 @@ def _telemetry_payload(
         f"Camera estimate {user_offset_text}"
     )
     subsystem_summary = (
-        "Perception tracking the marker; flight controller holding hover; "
+        f"Perception tracking the marker; {flight_mode} flight controller active; "
         "environment AI choosing shade; navigation AI checking safety."
+    )
+    flight_reward_text = (
+        f"{flight_reward:+.2f} ({flight_action})"
+        if flight_reward is not None
+        else f"n/a ({flight_action})"
     )
 
     return (
@@ -1671,6 +1679,7 @@ def _telemetry_payload(
             "umbrella_note": umbrella_note,
             "time": f"{t_wall:5.1f} seconds",
             "nav": nav_note,
+            "controller": flight_mode,
             "altitude": f"{drone_pos[2]:.2f} m above ground",
             "hover_error": f"{err_xy:.2f} m from target",
             "tracking": f"{confidence * 100:.0f}% confidence",
@@ -1678,6 +1687,7 @@ def _telemetry_payload(
             "user_position": f"x {user_pos[0]:.2f}, y {user_pos[1]:.2f}",
             "user_offset": user_offset_text,
             "location_summary": location_summary,
+            "flight_reward": flight_reward_text,
             "weather": f"{weather_mode}: light {lux:.0f} lux, rain {rain:.2f}, wind {wind:.1f} m/s",
             "subsystem_summary": subsystem_summary,
             "perception": "Tracking the red user marker",
@@ -1690,6 +1700,10 @@ def _telemetry_payload(
             "nav": "ACTIVE" if nav_override != "CONTINUE" else "OK",
             "umbrella": "ACTIVE" if umbrella_cmd == "DEPLOY" else "IDLE",
             "tracking": "OK" if confidence >= CONFIDENCE_THRESH else "LOW",
+            "controller": "ACTIVE" if flight_mode != "PID" else "OK",
+            "flight_reward": (
+                "GAIN" if flight_reward >= 0 else "COST"
+            ) if flight_reward is not None else "IDLE",
             "hover_error": "OK" if err_xy <= HOVER_RADIUS else "FAR",
             "mission": "ACTIVE" if nav_override != "CONTINUE" else "OK",
             "location_summary": "READY",
@@ -1702,7 +1716,14 @@ def _telemetry_payload(
     )
 
 
-def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
+def run(
+    duration=120.0,
+    gui=True,
+    scenario=SCENARIO_PARK,
+    flight="pid",
+    battery_start=100.0,
+    battery_drain_rate=BATTERY_DRAIN_RATE,
+):
     mode = p.GUI if gui else p.DIRECT
     phys = p.connect(mode)
     p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=phys)
@@ -1725,12 +1746,22 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
                 physicsClientId=phys,
             )
 
+    flight_controller = RuntimeFlightController(flight)
+    if flight_controller.fallback_reason:
+        print(f"[flight] Q-learning unavailable; falling back to PID ({flight_controller.fallback_reason})")
+
     obstacles = build_environment(phys, scenario)
     initial_user_pos = scenario_user_position(scenario, 0.0)
 
     # Drone and user are assembled from primitive bodies so the scene has a
     # readable physical scale while the AI/control code keeps the same inputs.
     drone_id, drone_parts = create_drone(phys, initial_user_pos[:2])
+    drone_damping = LINEAR_DAMPING if flight_controller.using_q else RUNTIME_PID_DAMPING
+    p.changeDynamics(
+        drone_id, -1, mass=DRONE_MASS_KG,
+        linearDamping=drone_damping, angularDamping=0.9,
+        physicsClientId=phys,
+    )
     person_parts = create_person(phys)
 
     # Umbrella disc (flat cylinder above the drone)
@@ -1757,16 +1788,12 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
 
     # Subsystems
     tracker    = Tracker(DistanceEstimator())
-    pid        = PIDFlightPolicy()
     if scenario == SCENARIO_FOREST:
-        pid.KP_XY = 13.0
-        pid.KI_XY = 0.15
-        pid.KD_XY = 7.0
-        pid.MAX_FORCE_XY = 15.0
+        flight_controller.tune_pid_for_forest()
     umbrella   = UmbrellaClassifier()
     nav_policy = NavSafetyPolicy()
 
-    battery_pct   = 100.0
+    battery_pct   = float(np.clip(battery_start, 0.0, 100.0))
     umbrella_cmd  = "STOW"
     nav_override  = "CONTINUE"
     confidence    = 0.0
@@ -1786,14 +1813,22 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
     umb_deployed = False
     t_start = time.monotonic()
     tick    = 0
+    prev_t_wall = 0.0
 
     print(f"SkyShade simulation running ({scenario} scenario) — Ctrl+C to stop.\n")
-    print(f"{'Time':>6}  {'Bat':>6}  {'Nav':<10}  {'Umbrella':<8}  {'Conf':>5}  {'ErrXY':>6}  {'Z':>5}")
-    print("-" * 65)
+    print(f"Flight controller: {flight_controller.label}")
+    print(
+        f"Battery starts at {battery_pct:.1f}% and drains at "
+        f"{battery_drain_rate:.2f}% per second.\n"
+    )
+    print(f"{'Time':>6}  {'Bat':>6}  {'Nav':<10}  {'Flight':<7}  {'Umbrella':<8}  {'Conf':>5}  {'ErrXY':>6}  {'Z':>5}")
+    print("-" * 75)
 
     try:
         while True:
             t_wall = time.monotonic() - t_start
+            loop_dt = max(0.0, t_wall - prev_t_wall)
+            prev_t_wall = t_wall
             if t_wall >= duration:
                 print(f"\nSimulation complete ({duration:.0f} s).")
                 break
@@ -1829,7 +1864,7 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
                         drone_id, [0, 0, 0], [0, 0, 0],
                         physicsClientId=phys,
                     )
-                    pid.reset()
+                    flight_controller.reset()
 
             user_delta = np.zeros(3, dtype=float) if wrapped_forest_lap else user_pos - prev_user_pos
             user_velocity = user_delta / max(action_dt, 1e-6)
@@ -1838,7 +1873,7 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
             prev_user_pos = user_pos.copy()
 
             # ── Battery ───────────────────────────────────────────────────────
-            battery_pct = max(0.0, battery_pct - BATTERY_DRAIN_RATE * action_dt)
+            battery_pct = max(0.0, battery_pct - battery_drain_rate * loop_dt)
 
             # ── Sub-1: Perception — camera pointing down from drone ────────────
             d_pos, _ = p.getBasePositionAndOrientation(drone_id, physicsClientId=phys)
@@ -1892,22 +1927,33 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
                 else:
                     nav_override = raw_override
 
-            # ── Sub-2: PID flight ─────────────────────────────────────────────
+            # ── Sub-2: flight control (PID or learned Q-policy) ──────────────
             lin_vel, _ = p.getBaseVelocity(drone_id, physicsClientId=phys)
             drone_vel  = np.array(lin_vel)
 
-            if nav_override == "LAND_NOW":
-                pid_target = np.array([drone_pos[0], drone_pos[1], 0.3])
-            elif nav_override == "RTH":
-                pid_target = np.array([0.0, 0.0, TARGET_ALTITUDE])
-            else:
-                # Follow slightly ahead of the user so coverage does not lag.
-                pid_target = lead_follow_target(user_pos, user_velocity)
-
-            force = pid.compute_force(drone_pos, drone_vel, pid_target, dt)
-            avoidance = obstacle_avoidance_force(drone_pos, obstacles)
+            flight_cmd = flight_controller.compute_force(
+                drone_pos=drone_pos,
+                drone_vel=drone_vel,
+                user_pos=user_pos,
+                user_velocity=user_velocity,
+                nav_override=nav_override,
+                wind_speed=weather_now["wind"],
+                dt=dt,
+            )
+            force = flight_cmd.force.copy()
+            avoidance = obstacle_avoidance_force(
+                drone_pos, obstacles,
+                radius=AVOIDANCE_RADIUS,
+                gain=AVOIDANCE_GAIN,
+                max_force=AVOIDANCE_MAX_FORCE,
+            )
             force += avoidance
             force[2] += HOVER_FORCE_N
+            wind_mag = float(weather_now.get("wind", 0.0))
+            gust_angle = 0.7 * t_wall + 2.0 * math.sin(0.23 * t_wall)
+            gust = wind_mag * WIND_FORCE_SCALE
+            force[0] += math.cos(gust_angle) * gust
+            force[1] += math.sin(gust_angle) * gust
             avoidance_for_display = avoidance.copy()
 
             for _ in range(STEPS_PER_ACTION):
@@ -1933,6 +1979,9 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
                 values, statuses = _telemetry_payload(
                     t_wall, battery_pct, nav_override, umbrella_cmd, confidence,
                     err_xy, np.array(d_pos2), user_pos, user_offset, weather_now,
+                    flight_mode=flight_cmd.controller,
+                    flight_action=flight_cmd.action,
+                    flight_reward=flight_cmd.reward,
                 )
                 telemetry.update(values, statuses, battery_pct=battery_pct)
 
@@ -1952,8 +2001,8 @@ def run(duration=120.0, gui=True, scenario=SCENARIO_PARK):
             if tick % (CONTROL_HZ * 10) == 0:
                 err_xy = float(np.linalg.norm(np.array(d_pos2[:2]) - user_pos[:2]))
                 print(f"{t_wall:6.1f}s  {battery_pct:5.1f}%  {nav_override:<10}  "
-                      f"{umbrella_cmd:<8}  {confidence:.2f}  {err_xy:6.2f}m  "
-                      f"{d_pos2[2]:.2f}m")
+                      f"{flight_cmd.controller:<7}  {umbrella_cmd:<8}  "
+                      f"{confidence:.2f}  {err_xy:6.2f}m  {d_pos2[2]:.2f}m")
 
             telemetry.tick(t_wall)
 
@@ -1979,6 +2028,29 @@ def main():
     ap.add_argument("--duration", type=float, default=120.0)
     ap.add_argument("--no-gui",   action="store_true")
     ap.add_argument(
+        "--flight",
+        choices=["pid", "q"],
+        default="pid",
+        help="Flight controller: 'pid' for production control, or 'q' for the learned Sub-2 policy.",
+    )
+    ap.add_argument(
+        "--battery-start",
+        type=float,
+        default=None,
+        help="Initial battery percentage. Default: 100, or 10 with --demo-low-battery.",
+    )
+    ap.add_argument(
+        "--battery-drain-rate",
+        type=float,
+        default=None,
+        help="Battery drain percentage per second. Default: 0.5, or 1.0 with --demo-low-battery.",
+    )
+    ap.add_argument(
+        "--demo-low-battery",
+        action="store_true",
+        help="Start near low battery so RTH/LAND_NOW appears quickly.",
+    )
+    ap.add_argument(
         "--launcher",
         action="store_true",
         help="Show the scenario launcher even if a scenario is provided.",
@@ -1999,10 +2071,26 @@ def main():
         launch_sim_process(settings)
         return
 
+    battery_start = args.battery_start
+    battery_drain_rate = args.battery_drain_rate
+    if args.demo_low_battery:
+        if battery_start is None:
+            battery_start = LOW_BATTERY_DEMO_START
+        if battery_drain_rate is None:
+            battery_drain_rate = LOW_BATTERY_DEMO_DRAIN_RATE
+
+    if battery_start is None:
+        battery_start = 100.0
+    if battery_drain_rate is None:
+        battery_drain_rate = BATTERY_DRAIN_RATE
+
     run(
         duration=args.duration,
         gui=not args.no_gui,
         scenario=args.scenario or SCENARIO_PARK,
+        flight=args.flight,
+        battery_start=battery_start,
+        battery_drain_rate=battery_drain_rate,
     )
 
 

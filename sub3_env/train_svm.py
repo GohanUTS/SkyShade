@@ -26,11 +26,13 @@ approximate deployment history.
 """
 
 import argparse
+import csv
 import os
 import sys
 import pickle
+import tempfile
 import numpy as np
-import pandas as pd
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "skyshade_matplotlib"))
 import matplotlib
 matplotlib.use("Agg")  # Non-interactive backend — swap to "TkAgg" for pop-ups
 import matplotlib.pyplot as plt
@@ -54,25 +56,35 @@ HYSTERESIS_WINDOW = 3    # Kept here for reference; runtime use is in classifier
 
 
 def load_data(csv_path: str):
-    df = pd.read_csv(csv_path)
     required = {"lux", "rain_raw", "wind_speed", "label"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"CSV missing columns: {missing}")
-    return df
+    with open(csv_path, newline="") as f:
+        reader = csv.DictReader(f)
+        columns = set(reader.fieldnames or [])
+        missing = required - columns
+        if missing:
+            raise ValueError(f"CSV missing columns: {missing}")
+
+        data = {name: [] for name in required}
+        for row in reader:
+            data["lux"].append(float(row["lux"]))
+            data["rain_raw"].append(float(row["rain_raw"]))
+            data["wind_speed"].append(float(row["wind_speed"]))
+            data["label"].append(int(row["label"]))
+
+    return {name: np.asarray(values) for name, values in data.items()}
 
 
-def build_features(df: pd.DataFrame) -> tuple:
+def build_features(df: dict) -> tuple:
     """
     Construct the 9-D feature matrix from the CSV.
 
     Deltas are computed row-to-row (first row has zero deltas).
     prev_action features are approximated from the shifted ground-truth label.
     """
-    lux = df["lux"].values.astype(float)
-    rain = df["rain_raw"].values.astype(float)
-    wind = df["wind_speed"].values.astype(float)
-    labels = df["label"].values.astype(int)
+    lux = np.asarray(df["lux"], dtype=float)
+    rain = np.asarray(df["rain_raw"], dtype=float)
+    wind = np.asarray(df["wind_speed"], dtype=float)
+    labels = np.asarray(df["label"], dtype=int)
 
     lux_delta = np.diff(lux, prepend=lux[0])
     rain_delta = np.diff(rain, prepend=rain[0])
@@ -106,14 +118,28 @@ def plot_confusion(clf, X, y):
 def plot_pca(X, y):
     pca = PCA(n_components=PCA_COMPONENTS)
     Xr = pca.fit_transform(X)
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
-    for label, name, colour in [(0, "Stow", "steelblue"), (1, "Deploy", "tomato")]:
-        mask = y == label
-        ax.scatter(Xr[mask, 0], Xr[mask, 1], Xr[mask, 2],
-                   label=name, c=colour, s=10, alpha=0.6)
-    ax.set_xlabel("PC1"); ax.set_ylabel("PC2"); ax.set_zlabel("PC3")
-    ax.set_title("PCA 3-D — weather sensor feature space")
+    series = [(0, "Stow", "steelblue"), (1, "Deploy", "tomato")]
+
+    try:
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+        for label, name, colour in series:
+            mask = y == label
+            ax.scatter(Xr[mask, 0], Xr[mask, 1], Xr[mask, 2],
+                       label=name, c=colour, s=10, alpha=0.6)
+        ax.set_xlabel("PC1"); ax.set_ylabel("PC2"); ax.set_zlabel("PC3")
+        ax.set_title("PCA 3-D — weather sensor feature space")
+    except Exception as exc:
+        plt.close("all")
+        print(f"3-D PCA plot unavailable ({exc}); falling back to 2-D.")
+        fig, ax = plt.subplots()
+        for label, name, colour in series:
+            mask = y == label
+            ax.scatter(Xr[mask, 0], Xr[mask, 1],
+                       label=name, c=colour, s=10, alpha=0.6)
+        ax.set_xlabel("PC1"); ax.set_ylabel("PC2")
+        ax.set_title("PCA 2-D — weather sensor feature space")
+
     ax.legend()
     plt.tight_layout()
     plt.savefig("pca_3d.png", dpi=100)
@@ -145,8 +171,11 @@ def train(csv_path: str, output_path: str):
     # Fit on full dataset for deployment
     clf.fit(X, y)
 
-    plot_confusion(clf, X, y)
-    plot_pca(X, y)
+    try:
+        plot_confusion(clf, X, y)
+        plot_pca(X, y)
+    except Exception as exc:
+        print(f"WARNING: plot generation failed ({exc}); continuing to save model.")
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "wb") as f:

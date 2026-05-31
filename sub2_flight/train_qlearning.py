@@ -43,6 +43,9 @@ STAGE3_WIND = 3.0
 
 LOG_INTERVAL = 500   # Print progress every N episodes
 TB_FLUSH_INTERVAL = 100
+TRAIN_MAX_STEPS = 250   # Episode cap during training (drone starts on target, so
+                        # 250 steps is ample to learn a stable hold and keeps the
+                        # 6075-state table trainable in a few minutes)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -54,10 +57,23 @@ def _make_user_pos(stage: int, rng: np.random.Generator) -> list:
     return [rng.uniform(-2, 2), rng.uniform(-2, 2), 0.0]
 
 
-def _wind_for_episode(stage: int) -> float:
+def _make_drone_offset(rng: np.random.Generator) -> list:
+    """Random drone start offset from the hover target (within the state grid).
+
+    The drone must learn to fly in and brake from anywhere in the representable
+    offset range, so every episode starts it somewhere off-target.
+    """
+    return [rng.uniform(-1.5, 1.5), rng.uniform(-1.5, 1.5), rng.uniform(-0.8, 0.8)]
+
+
+def _wind_for_episode(stage: int, rng: np.random.Generator) -> float:
+    """Stage 1 trains the calm (no-wind) regime; later stages randomise wind
+    across the LOW and MEDIUM buckets so every wind state gets low-epsilon
+    refinement.  (Fixing wind=3 for all later stages starved the no-wind states,
+    leaving the calm-air hover undertrained.)"""
     if stage == 1:
         return STAGE1_WIND
-    return STAGE2_WIND
+    return float(rng.uniform(0.0, 4.5))
 
 
 def _curriculum_stage(episode: int) -> int:
@@ -95,8 +111,12 @@ def train(episodes: int, output_path: str):
     if writer is None:
         writer = _NoOpWriter()
 
+    # Seed BOTH RNGs: the env's wind disturbance uses the global numpy RNG, so
+    # without this each training run differed and the (sensitive) calm-air policy
+    # came out differently every time.
+    np.random.seed(0)
     q_table = np.zeros((N_STATES, N_ACTIONS), dtype=np.float32)
-    env = HoverEnv(render=False)
+    env = HoverEnv(render=False, max_episode_steps=TRAIN_MAX_STEPS)
     rng = np.random.default_rng(0)
 
     epsilon = EPSILON_START
@@ -104,13 +124,14 @@ def train(episodes: int, output_path: str):
 
     for ep in range(episodes):
         stage = _curriculum_stage(ep)
-        wind = _wind_for_episode(stage)
+        wind = _wind_for_episode(stage, rng)
         user_pos = _make_user_pos(stage, rng)
+        drone_offset = _make_drone_offset(rng)
 
         # Stage 3: update user position mid-episode to simulate walking
         user_walk = stage == 3
 
-        state = env.reset(wind_speed=wind, user_pos=user_pos)
+        state = env.reset(wind_speed=wind, user_pos=user_pos, drone_offset=drone_offset)
         total_reward = 0.0
         done = False
         step = 0
@@ -126,6 +147,7 @@ def train(episodes: int, output_path: str):
             if user_walk and step % 20 == 0 and step > 0:
                 env._user_pos[0] += rng.uniform(-0.2, 0.2)
                 env._user_pos[1] += rng.uniform(-0.2, 0.2)
+                env.notify_target_moved()
 
             next_state, reward, done, _ = env.step(action)
 

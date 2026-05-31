@@ -3,9 +3,10 @@ Sub-2 Flight — flight policy implementations.
 
 FlightPolicy    : greedy policy backed by a pre-trained Q-table.
 PIDFlightPolicy : continuous PID hover controller (no Q-table required).
-                  Used as the primary runtime controller because the tabular
-                  Q-learning state space (position only, no velocity) cannot
-                  handle momentum build-up in the PyBullet physics engine.
+
+The Q-learning environment now includes velocity buckets in its state, so the
+learned table can brake instead of flying through the hover target. PID remains
+the default production controller because it is smoother for the live demo.
 """
 
 import os
@@ -50,9 +51,9 @@ class PIDFlightPolicy:
     PID hover controller.
 
     Reads continuous position + velocity from the environment each tick and
-    outputs a 3-D force vector via env.pid_step().  Replaces the discrete
-    Q-learning policy because the tabular state space (position only, no
-    velocity) cannot suppress momentum oscillation in PyBullet physics.
+    outputs a 3-D force vector via env.pid_step().  It remains the smooth
+    default runtime controller; the Q-table is available for learned-policy
+    demos and validation.
 
     Gains are tuned for:
       DRONE_MASS_KG = 1.5 kg
@@ -166,6 +167,7 @@ class PIDFlightPolicy:
             if walk and step % 20 == 0 and rng is not None:
                 env._user_pos[0] += rng.uniform(-0.2, 0.2)
                 env._user_pos[1] += rng.uniform(-0.2, 0.2)
+                env.notify_target_moved()
 
             if done:
                 break
