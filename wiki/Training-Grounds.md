@@ -7,10 +7,23 @@ The Training Grounds hub is a dedicated window for training, visualising, and ev
 ## Opening the hub
 
 ```
-python run_sim.py
+python3 run_sim.py
 ```
 
-In the left panel of the launcher, click any of the four training card buttons:
+### Option A — One-click Auto-Train (recommended)
+
+Two large buttons sit below the subsystem cards on the launcher:
+
+| Button | Colour | What it does | Time |
+|---|---|---|---|
+| **🚀 Auto-Train All** | Green | Warm-starts from existing models, trains all subsystems sequentially, no button pressing | ~3 min |
+| **🔄 Auto-Retrain from Scratch** | Amber | Deletes all model files first, then trains everything fresh | ~3 min |
+
+The hub opens automatically, switches tabs, and advances through all stages without any user input. A green progress banner shows which step is running. When done it turns green: `✅ Training complete! → Select scenario in the Launcher and click Launch.`
+
+### Option B — Train individually
+
+Click any subsystem card button to open the hub on that specific tab:
 
 | Button | Colour | Opens hub on tab |
 |---|---|---|
@@ -19,7 +32,18 @@ In the left panel of the launcher, click any of the four training card buttons:
 | **Train SVM** | Pink | Sub-3 Weather SVM |
 | **Solve MDP** | Purple | Sub-4 Nav Safety |
 
-The hub window is titled **SkyShade — Training Grounds** and has three tabs along the top.
+The hub window is titled **SkyShade — Training Grounds** and has four tabs along the top.
+
+### Auto-Train sequence (what happens automatically)
+
+| Stage | Subsystem | Steps | Time |
+|---|---|---|---|
+| 1 / 4 | Sub-2 Flight PPO | 100 000 | ~60 sec |
+| 2 / 4 | Sub-3 Weather SVM | 99 samples | ~3 sec |
+| 3 / 4 | Sub-4 Battery MDP | value iteration | ~1 sec |
+| 4 / 4 | Sub-4 Nav SAC | 80 000 | ~50 sec |
+
+**Total: ~2 min 15 sec** — well under 5 minutes.
 
 ---
 
@@ -297,9 +321,31 @@ A 10 × 8 × 3.5 m room with 7 cylindrical pillars. The auto-rotating scene show
 
 ### Right panel — Nav SAC Reward Curve
 
-- **Teal line** — mean episode reward per rollout
-- Reward starts low (drone crashing/getting stuck) and trends upward as the policy learns to avoid obstacles
-- At convergence, episodes with goal arrival give a +200 completion bonus, pushing reward above +100
+The chart has two reference lines that tell you immediately whether the drone is reaching the goal:
+
+| Line | Colour | Meaning |
+|---|---|---|
+| Upper dashed | Green | **Goal reached zone** — reward > 0 means the +200 arrival bonus is dominating |
+| Lower dashed | Red | **Stuck/crashing zone** — reward near −150 = drone hitting pillars or timing out |
+
+**The three phases of a training run:**
+
+| Phase | Steps | What's happening |
+|---|---|---|
+| Random | 0 – 10k | Filling replay buffer; occasional goal stumbles |
+| The dip | 10k – 25k | Q-function inaccurate — tries "smart" moves that fail, crashes more |
+| Learning | 25k – 80k | Q-function converges, routes around pillars |
+
+**How to read the current reward:**
+- **Reward < 0**: still learning, drone hasn't cracked consistent navigation yet
+- **Reward > 0**: drone reaching goal in most episodes ✓
+- **Reward ≈ +150–200**: goal reached in nearly every episode — excellent
+
+A trend label at the bottom-right updates automatically:
+- `✓ Goal being reached consistently!` (green) — reward > 50
+- `↑ Approaching goal zone` — reward > 0 but < 50
+- `↑ Learning — reward rising` — negative but improving
+- `Still exploring` — flat or falling
 
 ### Controls — Navigation training (teal row)
 

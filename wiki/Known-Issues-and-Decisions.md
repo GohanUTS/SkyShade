@@ -148,6 +148,29 @@ A log of significant design decisions, bugs fixed, and current limitations — s
 
 ---
 
+### Auto-Train NameError (`total_steps` undefined)
+
+**Symptom:** `NameError: name 'total_steps' is not defined` when Auto-Train triggered `_start_sub2()`.
+
+**Root cause:** The ETA status message referenced `total_steps` (old name) instead of `total` (the local variable).
+
+**Fix:** Renamed `total_steps` → `total` in the status message line.
+
+---
+
+### Weather visuals expanded to full scenario coverage
+
+**Decision:** `draw_weather_visuals()` now covers 14×14 m (was 4×4 m) with 80–360 rain drops, wind streamers, and ground mist.
+
+**Added effects:**
+- **Wind streamers** (new) — horizontal grey-blue streaks showing wind direction and speed; appear when wind ≥ 1.5 m/s
+- **Ground mist** (new) — near-floor wisps in heavy rain/storm conditions
+- **Cloud bank** expanded — 4 clouds in a row → 7 cloudy / 9 storm clouds spread across the full horizon; no clouds in Clear mode
+- **Rain area** — 4×4 m → 14×14 m to cover park/forest/buildings scenarios
+- **Rain drift** — drops now tilt with a slowly rotating wind direction (`t_wall * 0.15 rad/s`)
+
+---
+
 ## Bugs fixed
 
 ### Sub-4 always outputting `LAND_NOW`

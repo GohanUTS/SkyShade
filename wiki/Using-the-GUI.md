@@ -7,40 +7,48 @@ SkyShade has two main GUI windows: the **Launcher** (where you train and configu
 ## The Launcher
 
 ```bash
-python run_sim.py
+python3 run_sim.py
 ```
 
 The launcher opens automatically. It has two columns:
 
 ```
-┌─────────────────────────────┬────────────────────────────────────────┐
-│  Training Ground (left)     │  Scenario + Mission Setup (right)      │
-│                             │                                        │
-│  Sub-1 Perception  [Calib]  │  [Park]  [Forest Trail]  [Buildings]  │
-│  Sub-2 Flight      [Train]  │                                        │
-│  Sub-4 Nav Safety  [Solve]  │  Duration: [120]  seconds              │
-│                             │                                        │
-│  Status message             │  Flight Control: PPO active            │
-│                             │                                        │
-│                             │  [ Show PyBullet GUI ]                 │
-│                             │                                        │
-│                             │  [ Launch ]   [ Cancel ]               │
-└─────────────────────────────┴────────────────────────────────────────┘
+┌──────────────────────────────────┬──────────────────────────────────────┐
+│  Training Ground (left)          │  Scenario + Mission Setup (right)    │
+│                                  │                                      │
+│  Sub-1 Perception  [Calibrate]   │  [Park]  [Forest Trail]  [Buildings] │
+│  Sub-2 Flight      [Train PPO]   │                                      │
+│  Sub-3 Weather     [Train SVM]   │  Duration: [120]  seconds            │
+│  Sub-4 Nav Safety  [Solve MDP]   │                                      │
+│                                  │  Flight Control: PPO active          │
+│  [🚀 Auto-Train All  (~3 min)]   │                                      │
+│  [🔄 Auto-Retrain from Scratch]  │  [ Launch ]   [ Cancel ]             │
+└──────────────────────────────────┴──────────────────────────────────────┘
 ```
 
-### Left panel — Training Ground
+### Fastest way — Auto-Train buttons
 
-The three cards show each trainable subsystem. Click the coloured button on the right of each card to open the **Training Grounds hub** on the relevant tab.
+Two large buttons sit below the subsystem cards:
+
+| Button | Colour | What happens | Time |
+|---|---|---|---|
+| **🚀 Auto-Train All** | Green | Opens the hub, trains all 4 subsystems sequentially with no button pressing | ~3 min |
+| **🔄 Auto-Retrain from Scratch** | Amber | Deletes all model files first, then trains everything from random weights | ~3 min |
+
+The hub opens, the progress banner shows `"🚀 Auto-Train Step 2 / 4 — Sub-3 Weather SVM (~5 sec)…"`, tabs switch automatically, and when complete the banner turns green: `"✅ Training complete! → Select scenario in the Launcher and click Launch."`
+
+### Left panel — Individual subsystem cards
+
+To train a specific subsystem only, click its coloured button:
 
 | Card | Button | Colour | Opens |
 |---|---|---|---|
 | Sub-1 Perception | **Calibrate** | Green | Calibration room — live tracker check |
 | Sub-2 Flight | **Train PPO** | Blue | 3D hover arena — PPO training + evaluate |
-| Sub-4 Nav Safety | **Solve MDP** | Purple | 3D obstacle room — MDP + nav training |
+| Sub-3 Weather | **Train SVM** | Pink | 3D weather scene — SVM training + live demo |
+| Sub-4 Nav Safety | **Solve MDP** | Purple | 3D obstacle room — MDP + SAC nav training |
 
-The status message below the cards updates to explain what each subsystem does.
-
-> **Train these before launching.** The Launch button will warn you if models are missing.
+> **Train all before launching.** The Launch button warns if any model is missing and offers to open the Training Grounds or launch anyway with fallback controllers.
 
 ### Right panel — Scenario
 

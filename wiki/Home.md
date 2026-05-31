@@ -42,15 +42,29 @@ python run_sim.py
 
 ## Before first launch — train the models
 
-The launcher blocks the sim if trained models are missing:
+### Fastest: one-click Auto-Train (~3 min)
 
-| Step | Card | Button | Time (first run) | Time (repeat) |
+Click **🚀 Auto-Train All** on the launcher. The Training Grounds hub opens and trains all subsystems automatically — no button pressing needed:
+
+```
+Step 1/4  Sub-2 Flight PPO   ~60 sec
+Step 2/4  Sub-3 Weather SVM   ~3 sec
+Step 3/4  Sub-4 Battery MDP   ~1 sec
+Step 4/4  Sub-4 Nav SAC       ~50 sec
+Total ≈ 2 min 15 sec
+```
+
+When complete, the banner turns green: `✅ Training complete! → Select scenario and Launch.`
+
+### Or train individually
+
+| Step | Card | Button | Time (first) | Time (repeat) |
 |---|---|---|---|---|
-| 1 | Sub-1 Perception | **Calibrate** | Instant — verify tracker only | Instant |
-| 2 | Sub-2 Flight | **Train PPO** | ~2 min (4 parallel envs) | ~1 min fine-tune |
+| 1 | Sub-1 Perception | **Calibrate** | Instant | Instant |
+| 2 | Sub-2 Flight | **Train PPO** | ~2 min (4 parallel envs) | ~1 min |
 | 3 | Sub-3 Weather | **Train SVM** | < 2 sec | < 2 sec |
 | 4 | Sub-4 Safety | **Solve MDP** | < 1 sec | < 1 sec |
-| 5 | Sub-4 Safety | **Train Navigation** | ~3 min (SAC) | ~1 min fine-tune |
+| 5 | Sub-4 Safety | **Train Navigation** | ~1 min (SAC) | ~30 sec |
 
 See [Training Grounds](Training-Grounds) for a full guide to every tab and visual, and [Using the GUI](Using-the-GUI) for step-by-step instructions.
 

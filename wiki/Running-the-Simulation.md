@@ -108,11 +108,25 @@ ros2 run skyshade nav_safety_node
 - The blue quadcopter hovers above the red sphere (user) at 2.5 m altitude
 - The user walks a figure-8 path; the drone follows using the PPO policy
 - The telemetry dashboard shows live AI evidence: marker tracking, avoidance force, battery, umbrella decision
-- Weather cycles clear → cloudy → rainy every 60 s
 - Battery drains at 0.5% per second; the Sub-4 MDP triggers RTH when battery falls below the safe threshold
 - The umbrella disc turns green on `DEPLOY`, grey on `STOW`
 - The terminal logs a row every 5 seconds showing: `Time  Bat  Nav  Flight  Umbrella  Conf  ErrXY  Z`
 - **After the simulation ends**, the terminal prints a full **Efficiency Report** with grades for each subsystem — see [Validation and Results](Validation-and-Results) for how to read it
+
+### Weather cycle and visuals
+
+Weather cycles automatically through four phases over ~60 s:
+
+| Phase | Lux | Rain | Wind | Visual effects in PyBullet |
+|---|---|---|---|---|
+| **Clear ☀** | High | 0 | Low | No clouds, no rain |
+| **Cloudy ⛅** | Medium | Trace | Medium | 7 grey clouds across the horizon |
+| **Rainy 🌧** | Low | 0.3–0.7 | Moderate | 80–250 animated rain drops across 14×14 m, 9 dark storm clouds, wind streaks |
+| **Storm ⛈** | Very low | > 0.7 | High | Dense rain, ground-level mist wisps near the floor, strong wind streamers |
+
+**Wind streamers** appear whenever wind ≥ 1.5 m/s — horizontal grey-blue streaks showing wind direction and speed. They slowly rotate so the wind direction changes over time.
+
+The Sub-3 SVM reads the weather sensors every second and decides `DEPLOY`/`STOW` for the umbrella canopy.
 
 ### Via ROS 2 launch (advanced)
 
