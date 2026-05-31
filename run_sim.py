@@ -1666,11 +1666,13 @@ class TrainingGroundsHub:
         self._nav_steps_var   = None
         self._gate_var        = None
         self._sub1_btn        = None
-        self._sub2_start_btn  = self._sub2_stop_btn = self._sub2_entry = None
-        self._sub2_eval_btn   = None
-        self._sub4_solve_btn  = self._sub4_stop_btn = None
-        self._nav_start_btn   = self._nav_stop_btn  = self._nav_entry = None
-        self._nav_eval_btn    = None
+        self._sub2_start_btn   = self._sub2_stop_btn  = self._sub2_entry = None
+        self._sub2_retrain_btn = None
+        self._sub2_eval_btn    = None
+        self._sub4_solve_btn   = self._sub4_stop_btn = None
+        self._nav_start_btn    = self._nav_stop_btn  = self._nav_entry = None
+        self._nav_retrain_btn  = None
+        self._nav_eval_btn     = None
 
         self._build_ui(Figure, FigureCanvasTkAgg)
         self._tick()
@@ -1812,12 +1814,19 @@ class TrainingGroundsHub:
                                         state="disabled")
         self._sub2_stop_btn.grid(row=1, column=3, sticky="e", padx=(8, 0), pady=(6, 0))
 
+        self._sub2_retrain_btn = tk.Button(ctrl, text="🔄  Retrain from Scratch",
+                                           command=self._retrain_sub2,
+                                           bg="#92400e", fg="#fef3c7", relief="flat",
+                                           font=("Arial", 10, "bold"), padx=12, pady=6)
+        self._sub2_retrain_btn.grid(row=2, column=0, columnspan=2, sticky="ew",
+                                     pady=(8, 0))
+
         self._sub2_eval_btn = tk.Button(ctrl, text="Evaluate Model",
                                         command=self._run_sub2_eval,
                                         bg="#0e7490", fg="#cffafe", relief="flat",
                                         font=("Arial", 10, "bold"), padx=12, pady=6)
-        self._sub2_eval_btn.grid(row=2, column=0, columnspan=4, sticky="ew",
-                                  pady=(8, 0))
+        self._sub2_eval_btn.grid(row=2, column=2, columnspan=2, sticky="ew",
+                                  padx=(8, 0), pady=(8, 0))
 
     def _build_sub3_tab(self, frame, Figure, FigureCanvasTkAgg):
         # Left: 3D animated weather scene (drone + umbrella + rain + wind).
@@ -1850,7 +1859,7 @@ class TrainingGroundsHub:
                  ).grid(row=0, column=0, sticky="w")
 
         self._sub3_train_btn = tk.Button(
-            ctrl, text="Train SVM",
+            ctrl, text="🔄  Train / Retrain SVM",
             command=self._start_sub3,
             bg="#831843", fg="#fce7f3", relief="flat",
             font=("Arial", 10, "bold"), padx=12, pady=6)
@@ -1907,12 +1916,19 @@ class TrainingGroundsHub:
                                        state="disabled")
         self._nav_stop_btn.grid(row=1, column=3, sticky="e", padx=(6, 0), pady=(4, 0))
 
+        self._nav_retrain_btn = tk.Button(nav_ctrl, text="🔄  Retrain from Scratch",
+                                          command=self._retrain_nav,
+                                          bg="#92400e", fg="#fef3c7", relief="flat",
+                                          font=("Arial", 10, "bold"), padx=10, pady=5)
+        self._nav_retrain_btn.grid(row=2, column=0, columnspan=2, sticky="ew",
+                                    pady=(6, 0))
+
         self._nav_eval_btn = tk.Button(nav_ctrl, text="Evaluate Model",
                                        command=self._run_nav_eval,
                                        bg="#0e7490", fg="#cffafe", relief="flat",
                                        font=("Arial", 10, "bold"), padx=10, pady=5)
-        self._nav_eval_btn.grid(row=2, column=0, columnspan=4, sticky="ew",
-                                 pady=(6, 0))
+        self._nav_eval_btn.grid(row=2, column=2, columnspan=2, sticky="ew",
+                                 padx=(6, 0), pady=(6, 0))
 
         # MDP solver — compact secondary row
         mdp_ctrl = tk.Frame(frame, bg="#0f172a", padx=14, pady=4)
@@ -2368,6 +2384,24 @@ class TrainingGroundsHub:
 
         self._sub3_canvas.draw_idle()
 
+    def _retrain_sub2(self):
+        """Delete the existing PPO model and train from scratch."""
+        if self._sub2_training:
+            return
+        # Remove saved model so warm-start won't trigger
+        for p in [self._PPO_PATH, self._PPO_PATH.replace(".zip", "")]:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        # Clear multi-run history — fresh slate on the chart
+        self._sub2_runs.clear()
+        self._sub2_efficiency = ""
+        self._sub2_ready = False
+        self._sub2_status_var.set("Deleted previous model — starting from scratch…")
+        self._start_sub2()
+
     def _start_sub2(self):
         if self._sub2_training:
             return
@@ -2386,7 +2420,7 @@ class TrainingGroundsHub:
         self._sub2_efficiency = ""
         self._sub2_history    = []   # fresh history for this run
         self._sub2_entry.configure(state="disabled")
-        self._sub2_start_btn.configure(state="disabled")
+        self._sub2_start_btn.configure(state="disabled"); self._sub2_retrain_btn.configure(state="disabled")
         self._sub2_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                       activebackground="#b91c1c")
         warm = os.path.exists(self._PPO_PATH)
@@ -2830,6 +2864,23 @@ class TrainingGroundsHub:
 
     # ── Sub-4 nav training controls ───────────────────────────────────────────
 
+    def _retrain_nav(self):
+        """Delete the existing SAC nav model and train from scratch."""
+        if self._nav_training:
+            return
+        nav_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "models", "ppo_nav_v1")
+        for p in [nav_path, nav_path + ".zip"]:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        self._nav_ready = False
+        self._nav_efficiency = ""
+        self._nav_status_var.set("Deleted previous model — starting from scratch…")
+        self._start_nav()
+
     def _start_nav(self):
         if self._nav_training:
             return
@@ -2848,7 +2899,7 @@ class TrainingGroundsHub:
         self._nav_training   = True
         self._nav_efficiency = ""
         self._nav_entry.configure(state="disabled")
-        self._nav_start_btn.configure(state="disabled")
+        self._nav_start_btn.configure(state="disabled"); self._nav_retrain_btn.configure(state="disabled")
         self._nav_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                      activebackground="#b91c1c")
         warm_note = "SAC fine-tuning from existing model…" if os.path.exists(self._NAV_PATH) else "SAC training from scratch…"
@@ -2905,6 +2956,7 @@ class TrainingGroundsHub:
                 run_n = len(self._sub2_runs)
                 btn_lbl = f"Fine-tune  (Run {run_n + 1})" if self._sub2_ready else "Start Training"
                 self._sub2_start_btn.configure(state="normal", text=btn_lbl)
+                self._sub2_retrain_btn.configure(state="normal")
                 self._sub2_stop_btn.configure(state="disabled", bg="#334155",
                                                fg="#94a3b8", activebackground="#475569")
                 warm_str = "fine-tuned from previous model" if warm else "trained from scratch"
@@ -2919,6 +2971,7 @@ class TrainingGroundsHub:
                 self._sub2_training = False
                 self._sub2_entry.configure(state="normal")
                 self._sub2_start_btn.configure(state="normal")
+                self._sub2_retrain_btn.configure(state="normal")
                 self._sub2_stop_btn.configure(state="disabled", bg="#334155",
                                                fg="#94a3b8", activebackground="#475569")
                 self._sub2_status_var.set(f"Error: {msg[1][:120]}")
@@ -2979,6 +3032,7 @@ class TrainingGroundsHub:
                 self._nav_ready    = os.path.exists(self._NAV_PATH)
                 self._nav_entry.configure(state="normal")
                 self._nav_start_btn.configure(state="normal")
+                self._nav_retrain_btn.configure(state="normal")
                 self._nav_stop_btn.configure(state="disabled", bg="#334155",
                                               fg="#94a3b8", activebackground="#475569")
                 warm_str = "SAC fine-tuned from previous model" if warm else "SAC trained from scratch"
@@ -2993,6 +3047,7 @@ class TrainingGroundsHub:
                 self._nav_training = False
                 self._nav_entry.configure(state="normal")
                 self._nav_start_btn.configure(state="normal")
+                self._nav_retrain_btn.configure(state="normal")
                 self._nav_stop_btn.configure(state="disabled", bg="#334155",
                                               fg="#94a3b8", activebackground="#475569")
                 self._nav_status_var.set(f"Error: {msg[1][:100]}")
