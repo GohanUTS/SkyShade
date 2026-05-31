@@ -5055,6 +5055,13 @@ def run(
     tick    = 0
     prev_t_wall = 0.0
 
+    # ── Stats accumulators for end-of-sim efficiency report ──────────────────
+    _stats_err_xy   = []   # hover error each tick (m)
+    _stats_conf     = []   # tracker confidence
+    _stats_umb      = []   # umbrella state per tick (1=deploy, 0=stow)
+    _stats_umb_need = []   # should umbrella be deployed? (rain > 0.3)
+    _stats_in_hover = []   # 1 if drone within 0.5m of user, else 0
+
     print(f"SkyShade simulation running ({scenario} scenario) — Ctrl+C to stop.\n")
     print(f"Flight controller: {flight_controller.label}")
     print(
@@ -5237,9 +5244,17 @@ def run(
                     gimbal_action,
                 )
 
-            # ── Console log every 10 s ────────────────────────────────────────
-            if tick % (CONTROL_HZ * 10) == 0:
-                err_xy = float(np.linalg.norm(np.array(d_pos2[:2]) - user_pos[:2]))
+            # ── Accumulate stats ──────────────────────────────────────────────
+            _err = float(np.linalg.norm(np.array(d_pos2[:2]) - user_pos[:2]))
+            _stats_err_xy.append(_err)
+            _stats_conf.append(float(confidence))
+            _stats_umb.append(1.0 if umbrella_cmd == "DEPLOY" else 0.0)
+            _stats_umb_need.append(1.0 if weather_now.get("rain", 0) > 0.3 else 0.0)
+            _stats_in_hover.append(1.0 if _err <= 0.5 else 0.0)
+
+            # ── Console log every 5 s ─────────────────────────────────────────
+            if tick % (CONTROL_HZ * 5) == 0:
+                err_xy = _err
                 print(f"{t_wall:6.1f}s  {battery_pct:5.1f}%  {nav_override:<10}  "
                       f"{flight_cmd.controller:<7}  {umbrella_cmd:<8}  "
                       f"{confidence:.2f}  {err_xy:6.2f}m  {d_pos2[2]:.2f}m")
@@ -5261,6 +5276,54 @@ def run(
         telemetry.close()
         p.disconnect(phys)
         print("Disconnected.")
+
+    # ── End-of-sim efficiency report ─────────────────────────────────────────
+    if _stats_err_xy:
+        N = len(_stats_err_xy)
+        mean_err    = float(np.mean(_stats_err_xy))
+        hover_pct   = float(np.mean(_stats_in_hover)) * 100
+        mean_conf   = float(np.mean(_stats_conf))
+        umb_acc_pct = (float(np.mean(
+            [a == b for a, b in zip(_stats_umb, _stats_umb_need)])) * 100
+            if _stats_umb_need else 100.0)
+
+        # Colour helpers (ANSI)
+        def _ok(s):  return f"\033[32m{s}\033[0m"
+        def _warn(s): return f"\033[33m{s}\033[0m"
+        def _bad(s):  return f"\033[31m{s}\033[0m"
+        def _grade(val, good, ok):
+            return (_ok if val >= good else _warn if val >= ok else _bad)
+
+        print("\n" + "═" * 60)
+        print("  SkyShade — Post-Run Efficiency Report")
+        print("═" * 60)
+        print(f"  Sub-2  Hover accuracy   : {hover_pct:5.1f}%  "
+              + _grade(hover_pct, 70, 40)(
+                  f"({'✓ good' if hover_pct >= 70 else '~ ok' if hover_pct >= 40 else '✗ train more'})"))
+        print(f"         Mean hover error  : {mean_err:5.2f} m  "
+              + _grade(100 - mean_err*100, 50, 0)(
+                  f"({'✓ within 0.5m' if mean_err <= 0.5 else '~ close' if mean_err <= 1.0 else '✗ far off target'})"))
+        print(f"  Sub-1  Tracker lock     : {mean_conf*100:5.1f}%  "
+              + _grade(mean_conf*100, 80, 60)(
+                  f"({'✓ reliable' if mean_conf >= 0.8 else '~ ok' if mean_conf >= 0.6 else '✗ poor lock'})"))
+        print(f"  Sub-3  Umbrella correct : {umb_acc_pct:5.1f}%  "
+              + _grade(umb_acc_pct, 85, 65)(
+                  f"({'✓ accurate' if umb_acc_pct >= 85 else '~ ok' if umb_acc_pct >= 65 else '✗ check SVM'})"))
+        print(f"  Sub-4  Battery at end   : {battery_pct:5.1f}%  "
+              + _grade(battery_pct, 30, 10)(
+                  f"({'✓ safe' if battery_pct >= 30 else '~ low' if battery_pct >= 10 else '✗ critical'})"))
+        print("═" * 60)
+
+        overall = (hover_pct + mean_conf*100 + umb_acc_pct) / 3
+        grade   = "A" if overall >= 80 else "B" if overall >= 65 else "C" if overall >= 50 else "D"
+        print(f"  Overall system score: {overall:.0f}%  Grade: {grade}")
+        if hover_pct < 50:
+            print("  → Train Sub-2 PPO more (hover accuracy is the bottleneck)")
+        if mean_conf < 0.7:
+            print("  → Check Sub-1 calibration (tracker confidence is low)")
+        if umb_acc_pct < 75:
+            print("  → Retrain Sub-3 SVM (umbrella decisions are inaccurate)")
+        print("═" * 60 + "\n")
 
 
 def main():
