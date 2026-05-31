@@ -92,12 +92,20 @@ class FlightTrainingWorker(threading.Thread):
             def _make_env():
                 return Monitor(PPOHoverEnv(stage=1))
 
+            # Use 'spawn' start method to avoid fork-in-thread segfaults on Linux.
+            # fork() from a daemon thread is unsafe; spawn creates a clean process.
+            import multiprocessing as _mp
             try:
-                # SubprocVecEnv: each env in its own process → true parallelism
+                _mp.set_start_method("spawn", force=False)
+            except RuntimeError:
+                pass   # already set
+
+            try:
                 env = make_vec_env(_make_env, n_envs=N_ENVS,
                                    vec_env_cls=SubprocVecEnv)
             except Exception:
-                # Fallback to single env if subprocess spawn fails
+                # Fallback to single-env if multiprocessing unavailable
+                q_ref.put(("progress", 0, 1, 0.0))   # signal fallback
                 env = make_vec_env(_make_env, n_envs=1,
                                    vec_env_cls=DummyVecEnv)
 
