@@ -2324,64 +2324,100 @@ class TrainingGroundsHub:
         self._sub3_azim = (self._sub3_azim + 0.3) % 360
         ax.view_init(elev=18, azim=self._sub3_azim)
 
-        # ── Right panel: gauges + decision + confusion matrix ─────────────────
+        # ── Right panel: weather gauges + decision + confusion matrix ────────
         ax_c = self._sub3_ax_chart
         ax_c.cla()
         ax_c.set_facecolor(_MPL_BG)
         for sp in ax_c.spines.values():
             sp.set_color(_MPL_EDGE)
         ax_c.set_xticks([]); ax_c.set_yticks([])
-        ax_c.set_title("SVM Decision & Weather", color=_MPL_TITLE, fontsize=12, pad=5)
 
-        # Weather gauges — horizontal bars
-        bar_y  = [0.78, 0.65, 0.52]
-        labels = ["Lux", "Rain", "Wind"]
-        vals   = [min(1.0, lux/100000), rain, min(1.0, wind/10)]
-        cols   = ["#fbbf24", "#60a5fa", "#67e8f9"]
-        for y, lbl, val, col in zip(bar_y, labels, vals, cols):
-            ax_c.barh(y, val, height=0.09, color=col, alpha=0.85,
-                      transform=ax_c.transAxes, left=0.12)
-            ax_c.text(0.02, y, lbl, transform=ax_c.transAxes,
-                      color=col, fontsize=11, fontweight="bold", va="center")
-            ax_c.text(0.98, y, f"{val:.2f}", transform=ax_c.transAxes,
-                      color=col, fontsize=10, va="center", ha="right")
+        phases      = ["Clear ☀", "Cloudy ⛅", "Rainy 🌧", "Storm ⛈"]
+        phase_idx   = int(phase * 4) % 4
+        phase_label = phases[phase_idx]
 
-        # Phase label
-        phases = ["Clear ☀", "Cloudy ⛅", "Rainy 🌧", "Storm ⛈"]
-        phase_idx = int(phase * 4) % 4
-        ax_c.text(0.5, 0.44, phases[phase_idx], transform=ax_c.transAxes,
-                  ha="center", color="#cbd5e1", fontsize=12)
+        ax_c.set_title(f"SVM Decision  ·  {phase_label}",
+                       color=_MPL_TITLE, fontsize=14, pad=6, fontweight="bold")
 
-        # Big decision banner
-        ax_c.text(0.5, 0.30, dec_txt,
-                  transform=ax_c.transAxes, ha="center",
-                  color=dec_col, fontsize=22, fontweight="bold")
+        # ── Weather gauges (bigger bars, bigger labels) ───────────────────────
+        bar_data = [
+            ("Lux",  min(1.0, lux/100000), "#fbbf24", f"{lux/1000:.0f}k lux"),
+            ("Rain", rain,                 "#60a5fa", f"{rain:.2f}"),
+            ("Wind", min(1.0, wind/10),    "#67e8f9", f"{wind:.1f} m/s"),
+        ]
+        for i, (lbl, val, col, display) in enumerate(bar_data):
+            y = 0.84 - i * 0.13
+            ax_c.barh(y, val, height=0.10, color=col, alpha=0.85,
+                      transform=ax_c.transAxes, left=0.16)
+            ax_c.text(0.01, y, lbl, transform=ax_c.transAxes,
+                      color=col, fontsize=14, fontweight="bold", va="center")
+            ax_c.text(0.99, y, display, transform=ax_c.transAxes,
+                      color=col, fontsize=13, va="center", ha="right")
 
-        # Confusion matrix (after training)
+        # ── SVM decision banner (very large) ─────────────────────────────────
+        bg_col  = "#14532d" if umbrella_open else "#1e293b"
+        ax_c.add_patch(__import__("matplotlib.patches", fromlist=["FancyBboxPatch"])
+                       .FancyBboxPatch((0.05, 0.44), 0.90, 0.13,
+                                       boxstyle="round,pad=0.02",
+                                       transform=ax_c.transAxes,
+                                       facecolor=bg_col, edgecolor=dec_col, linewidth=2))
+        ax_c.text(0.5, 0.505, dec_txt, transform=ax_c.transAxes,
+                  ha="center", va="center",
+                  color=dec_col, fontsize=26, fontweight="bold")
+
+        # ── Explanation line ──────────────────────────────────────────────────
+        explain = ("Umbrella open — heavy rain detected"
+                   if umbrella_open else "Umbrella closed — conditions clear")
+        ax_c.text(0.5, 0.41, explain, transform=ax_c.transAxes,
+                  ha="center", color="#94a3b8", fontsize=11, style="italic")
+
+        # ── Confusion matrix (larger cells, bigger text) ──────────────────────
         if self._sub3_cm is not None:
             cm = self._sub3_cm
-            total = cm.sum()
-            cm_labels = [["TN\nStow✓", "FP\nDeploy✗"], ["FN\nStow✗", "TP\nDeploy✓"]]
+            from matplotlib.patches import FancyBboxPatch
+            cm_labels = [["Correct stow",   "Wrong — deployed in clear"],
+                         ["Wrong — missed rain", "Correct deploy"]]
+            cm_counts = [[cm[0,0], cm[0,1]], [cm[1,0], cm[1,1]]]
             cm_cols   = [["#16a34a", "#dc2626"], ["#dc2626", "#16a34a"]]
             for ri in range(2):
                 for ci in range(2):
-                    bx = 0.08 + ci * 0.43
-                    by = 0.00 + ri * 0.13
-                    ax_c.add_patch(__import__("matplotlib.patches", fromlist=["FancyBboxPatch"])
-                                   .FancyBboxPatch((bx, by), 0.38, 0.11,
-                                                   boxstyle="round,pad=0.01",
-                                                   transform=ax_c.transAxes,
-                                                   facecolor=cm_cols[ri][ci], alpha=0.75,
-                                                   edgecolor="#334155", linewidth=1))
-                    ax_c.text(bx + 0.19, by + 0.06,
-                              f"{cm[ri, ci]}  {cm_labels[ri][ci]}",
+                    bx = 0.04 + ci * 0.48
+                    by = 0.00 + ri * 0.185
+                    ax_c.add_patch(FancyBboxPatch(
+                        (bx, by), 0.44, 0.16,
+                        boxstyle="round,pad=0.01",
+                        transform=ax_c.transAxes,
+                        facecolor=cm_cols[ri][ci], alpha=0.8,
+                        edgecolor="#334155", linewidth=1.5))
+                    # Count (big)
+                    ax_c.text(bx + 0.22, by + 0.11,
+                              str(cm_counts[ri][ci]),
                               transform=ax_c.transAxes, ha="center", va="center",
-                              color="white", fontsize=8, fontweight="bold")
+                              color="white", fontsize=20, fontweight="bold")
+                    # Label (small below count)
+                    ax_c.text(bx + 0.22, by + 0.035,
+                              cm_labels[ri][ci],
+                              transform=ax_c.transAxes, ha="center", va="center",
+                              color="white", fontsize=9)
 
-            ax_c.text(0.5, -0.01,
-                      f"CV accuracy: {self._sub3_accuracy:.1%}" if self._sub3_accuracy else "",
-                      transform=ax_c.transAxes, ha="center",
-                      color="#4ade80", fontsize=10, fontweight="bold")
+            # Row/col headers
+            ax_c.text(0.27, 0.40, "Actual: Stow",    transform=ax_c.transAxes,
+                      ha="center", color="#94a3b8", fontsize=10)
+            ax_c.text(0.75, 0.40, "Actual: Deploy",  transform=ax_c.transAxes,
+                      ha="center", color="#94a3b8", fontsize=10)
+
+            # CV accuracy prominently
+            acc_col = "#4ade80" if (self._sub3_accuracy or 0) >= 0.9 else "#f97316"
+            acc_txt = (f"Accuracy: {self._sub3_accuracy:.1%}  ✓ passes 90% target"
+                       if (self._sub3_accuracy or 0) >= 0.9
+                       else f"Accuracy: {self._sub3_accuracy:.1%}  ✗ below 90% target")
+            ax_c.text(0.5, -0.03, acc_txt, transform=ax_c.transAxes,
+                      ha="center", color=acc_col, fontsize=12, fontweight="bold")
+        else:
+            ax_c.text(0.5, 0.20,
+                      "Click  '🔄 Train / Retrain SVM'\nto train the model and\nsee results here.",
+                      transform=ax_c.transAxes, ha="center", va="center",
+                      color="#64748b", fontsize=13)
 
         self._sub3_canvas.draw_idle()
 
