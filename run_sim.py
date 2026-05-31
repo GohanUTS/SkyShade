@@ -249,44 +249,118 @@ def _draw_cloud(phys, x, y, z, scale, color):
 
 
 def _draw_cloud_bank(phys, mode):
-    if mode == "Cloudy":
-        color = [0.68, 0.73, 0.80]
-    else:
-        color = [0.42, 0.48, 0.58]
-
-    for cloud in [
-        (-3.0, -3.9, 4.10, 1.10),
-        (-0.7, -4.1, 4.35, 1.25),
-        (1.7, -3.8, 4.05, 1.00),
-        (3.4, -4.2, 4.30, 0.90),
-    ]:
+    """Draw clouds at the horizon — darker and more numerous in stormy weather."""
+    if mode == "Clear":
+        return   # no clouds in clear weather
+    elif mode == "Cloudy":
+        color  = [0.72, 0.77, 0.84]
+        clouds = [
+            (-5.0, -5.5, 4.8, 1.20),
+            (-2.0, -5.2, 4.4, 1.10),
+            ( 0.8, -5.6, 4.6, 1.30),
+            ( 3.5, -5.3, 4.2, 1.00),
+            ( 6.0, -5.8, 4.7, 0.90),
+            (-4.5,  5.0, 4.5, 1.00),
+            ( 2.0,  5.4, 4.3, 1.15),
+        ]
+    else:   # Rainy / Storm
+        color  = [0.38, 0.42, 0.52]
+        clouds = [
+            (-7.0, -6.0, 5.2, 1.60),
+            (-4.0, -5.8, 5.0, 1.40),
+            (-1.0, -6.2, 5.5, 1.70),
+            ( 2.5, -5.9, 5.1, 1.50),
+            ( 5.5, -6.3, 5.4, 1.45),
+            (-6.0,  5.5, 5.0, 1.35),
+            (-2.5,  6.0, 5.3, 1.55),
+            ( 1.5,  5.7, 5.1, 1.40),
+            ( 5.0,  6.2, 5.6, 1.65),
+        ]
+    for cloud in clouds:
         _draw_cloud(phys, *cloud, color)
 
 
-def draw_weather_visuals(phys, weather, rng):
-    mode = weather["mode"]
-    rain = weather["rain"]
-    wind = weather["wind"]
+def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0):
+    """Draw rain, wind streamers, mist and clouds in the PyBullet scene.
 
+    All visuals use addUserDebugLine with a short lifeTime so they animate
+    naturally — each call refreshes them for the current frame.
+    """
+    mode = weather["mode"]
+    rain = float(weather.get("rain", 0.0))
+    wind = float(weather.get("wind", 0.0))
+
+    # ── Clouds ───────────────────────────────────────────────────────────────
     _draw_cloud_bank(phys, mode)
 
-    if rain < 0.2:
-        return
+    # Slowly rotating wind direction (cycles over ~42 s)
+    wind_angle = t_wall * 0.15
+    wd_x = math.cos(wind_angle)
+    wd_y = math.sin(wind_angle) * 0.45
 
-    drop_count = int(30 + rain * 90)
-    for _ in range(drop_count):
-        x = float(rng.uniform(-4.0, 4.0))
-        y = float(rng.uniform(-4.0, 4.0))
-        z = float(rng.uniform(2.4, 5.2))
-        drift = 0.07 * wind
-        p.addUserDebugLine(
-            [x, y, z],
-            [x + drift, y + drift * 0.35, z - 1.05],
-            [0.18, 0.55, 1.0],
-            lineWidth=2.2 + rain * 2.0,
-            lifeTime=0.42,
-            physicsClientId=phys,
-        )
+    # ── Rain drops ───────────────────────────────────────────────────────────
+    # Cover the full scenario (park / forest / buildings span ~15 m)
+    if rain >= 0.10:
+        drop_count = int(80 + rain * 280)   # 80–360 drops
+        rain_r     = 14.0                   # half-width of rain area (m)
+        drop_len   = 0.55 + rain * 1.05     # 0.55–1.60 m per drop
+        lw         = 1.8 + rain * 2.8       # line width
+        brightness = min(1.0, 0.25 + rain * 0.80)
+        colour     = [0.12 * brightness, 0.48 * brightness, 1.0 * brightness]
+
+        for _ in range(drop_count):
+            x  = float(rng.uniform(-rain_r, rain_r))
+            y  = float(rng.uniform(-rain_r, rain_r))
+            z  = float(rng.uniform(3.0, 7.5))
+            dx = wd_x * wind * 0.14
+            dy = wd_y * wind * 0.14
+            p.addUserDebugLine(
+                [x, y, z],
+                [x + dx, y + dy, z - drop_len],
+                colour,
+                lineWidth=lw,
+                lifeTime=0.40,
+                physicsClientId=phys,
+            )
+
+    # ── Wind streamers ───────────────────────────────────────────────────────
+    # Horizontal streaks at varying heights that show wind speed + direction
+    if wind >= 1.5:
+        n_streaks = int(wind * 4)           # 6–28 streaks at 1.5–7 m/s
+        streak_len = wind * 0.40            # longer = faster wind
+        alpha      = min(0.85, wind / 8.0)
+        col        = [0.75 * alpha, 0.82 * alpha, 0.92 * alpha]
+
+        for _ in range(n_streaks):
+            x  = float(rng.uniform(-10.0, 10.0))
+            y  = float(rng.uniform(-10.0, 10.0))
+            z  = float(rng.uniform(0.4, 4.2))
+            p.addUserDebugLine(
+                [x, y, z],
+                [x + wd_x * streak_len, y + wd_y * streak_len, z],
+                col,
+                lineWidth=1.2 + wind * 0.18,
+                lifeTime=0.35,
+                physicsClientId=phys,
+            )
+
+    # ── Ground mist (heavy rain / storm only) ───────────────────────────────
+    if rain >= 0.55:
+        mist_n = int((rain - 0.55) * 60)   # 0–27 mist wisps
+        for _ in range(mist_n):
+            x  = float(rng.uniform(-8.0, 8.0))
+            y  = float(rng.uniform(-8.0, 8.0))
+            z  = float(rng.uniform(0.03, 0.35))
+            ex = x + float(rng.uniform(-1.2, 1.2))
+            ey = y + float(rng.uniform(-1.2, 1.2))
+            p.addUserDebugLine(
+                [x,  y,  z],
+                [ex, ey, z + float(rng.uniform(0.1, 0.45))],
+                [0.60, 0.64, 0.72],
+                lineWidth=3.5,
+                lifeTime=0.48,
+                physicsClientId=phys,
+            )
 
 
 def _visual_body(phys, shape, rgba, base_position, **shape_kwargs):
@@ -5480,7 +5554,7 @@ def run(
             )
 
             if DEBUG_WEATHER_LINES and gui and tick % 15 == 0:
-                draw_weather_visuals(phys, weather_now, weather_visual_rng)
+                draw_weather_visuals(phys, weather_now, weather_visual_rng, t_wall)
 
             # ── Telemetry update (every 10 ticks) ─────────────────────────────
             if tick % 10 == 0:
