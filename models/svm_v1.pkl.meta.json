@@ -4,5 +4,5 @@
   "model": "svm_v1.pkl",
   "samples": 99,
   "cv_accuracy": 0.96,
-  "trained_at": 1780284665.5815544
+  "trained_at": 1780294173.0085657
 }

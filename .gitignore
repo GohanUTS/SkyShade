@@ -31,3 +31,6 @@ runs/
 *.swo
 .idea/
 .vscode/
+
+# Vendored python deps (large, machine-local)
+.skyshade_pydeps/

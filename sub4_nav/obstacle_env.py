@@ -63,6 +63,41 @@ OBSTACLES = [
     ( 2.5, -2.5, 0.35),
 ]
 
+
+def scenario_obstacles(scenario):
+    """Return an obstacle layout (list of (x, y, radius)) shaped like the chosen
+    launch scenario, mapped into this 10×8 nav room (start −4.5, goal +4.5).
+
+    This is what makes Auto-Train "train on the selected scenario's world":
+    the SAC nav policy learns to dodge a layout resembling the city / park /
+    forest / trail it will actually fly in.  Unknown → the default pillar maze.
+    """
+    s = (scenario or "").lower()
+    if s == "buildings":
+        # City blocks — a denser 3×3 grid of larger pillars to weave through.
+        layout = []
+        for cx in (-2.6, 0.0, 2.6):
+            for cy in (2.5, 0.0, -2.5):
+                layout.append((cx, cy, 0.45))
+        return layout
+    if s == "park":
+        # Open park — a few scattered small trees.
+        return [(-1.6, 1.8, 0.30), (1.3, -1.7, 0.30), (0.2, 2.7, 0.28),
+                (2.1, 1.3, 0.30), (-2.2, -1.5, 0.30)]
+    if s == "forest":
+        # Dense trail through trunks — many small obstacles in rows.
+        layout = []
+        for cx in (-3.0, -1.5, 0.0, 1.5, 3.0):
+            layout.append((cx, 2.3, 0.24))
+            layout.append((cx, -2.3, 0.24))
+            layout.append((cx, 0.7 * math.sin(cx * 1.3), 0.22))
+        return layout
+    if s == "trail":
+        # Urban trail — a central pinch (the bridge) plus a couple of bollards.
+        return [(0.0, 1.7, 0.40), (0.0, -1.7, 0.40),
+                (-2.3, 0.4, 0.28), (2.3, -0.4, 0.28)]
+    return list(OBSTACLES)
+
 # ── Sensor / physics constants ─────────────────────────────────────────────────
 N_LIDAR    = 8
 LIDAR_R    = 5.0    # m  max ray range
@@ -83,10 +118,13 @@ class ObstacleNavEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, render: bool = False, max_steps: int = 1_200):
+    def __init__(self, render: bool = False, max_steps: int = 1_200,
+                 obstacles=None):
         super().__init__()
         self._render  = render
         self._max_steps = max_steps
+        # Per-instance obstacle layout (scenario-aware); defaults to the maze.
+        self.obstacles = [tuple(o) for o in (obstacles if obstacles else OBSTACLES)]
         self._phys_id  = None
         self._drone_id = None
         self._drone_pos = np.zeros(3)
@@ -149,7 +187,7 @@ class ObstacleNavEnv(gym.Env):
             "drone_xy": self._drone_pos[:2].copy(),
             "lidar":    self._cast_lidar(),
             "goal_xy":  np.array(GOAL_XY),
-            "obstacles": OBSTACLES,
+            "obstacles": self.obstacles,
             "room":     (ROOM_W, ROOM_D),
         }
 
@@ -178,7 +216,7 @@ class ObstacleNavEnv(gym.Env):
             return reward - 30.0, True
 
         # Obstacle collision
-        for ox, oy, r in OBSTACLES:
+        for ox, oy, r in self.obstacles:
             if math.hypot(self._drone_pos[0] - ox, self._drone_pos[1] - oy) < r + 0.18:
                 return reward - 50.0, True
 
@@ -230,7 +268,7 @@ class ObstacleNavEnv(gym.Env):
                         if 0 < t <= LIDAR_R:
                             t_min = min(t_min, t / LIDAR_R)
                 # Obstacles
-                for ox, oy, r in OBSTACLES:
+                for ox, oy, r in self.obstacles:
                     fx, fy = ox - px, oy - py
                     b = fx * dx + fy * dy
                     c = fx*fx + fy*fy - (r + 0.18)**2
@@ -263,7 +301,7 @@ class ObstacleNavEnv(gym.Env):
                                     physicsClientId=self._phys_id)
             p.createMultiBody(0, c, v, pos, physicsClientId=self._phys_id)
 
-        for ox, oy, r in OBSTACLES:
+        for ox, oy, r in self.obstacles:
             c = p.createCollisionShape(p.GEOM_CYLINDER, radius=r, height=WALL_H,
                                        physicsClientId=self._phys_id)
             v = p.createVisualShape(p.GEOM_CYLINDER, radius=r, length=WALL_H,

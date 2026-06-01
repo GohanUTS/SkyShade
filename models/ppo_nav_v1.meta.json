@@ -2,9 +2,10 @@
   "subsystem": "Sub-4 Navigation",
   "algorithm": "SAC",
   "model": "ppo_nav_v1.zip",
-  "steps_done": 28096,
-  "efficiency_pct": 56,
-  "warm_started": true,
-  "trained_at": 1780281086.428752,
+  "steps_done": 11966,
+  "efficiency_pct": 62,
+  "warm_started": false,
+  "trained_at": 1780293987.4080722,
+  "scenario": "park",
   "legacy_filename": "ppo_nav_v1.zip"
 }

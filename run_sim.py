@@ -79,6 +79,11 @@ WEATHER_MIN_SECONDS = 8.0
 WEATHER_MAX_SECONDS = 20.0
 UMBRELLA_DEPLOY_RAIN_THRESHOLD = 0.20  # matches Sub-3 training labels
 DEBUG_WEATHER_LINES = False
+# In-scene rain/cloud/mist visuals.  Drawn with addUserDebugLine, so they cost
+# GPU; redraw cadence + drop counts are tuned to stay smooth on integrated GPUs.
+# Disable with env SKYSHADE_WEATHER_VIS=0 if a machine still struggles.
+WEATHER_VISUALS = os.environ.get("SKYSHADE_WEATHER_VIS", "1") != "0"
+WEATHER_VIS_EVERY = 12   # redraw weather visuals every N ticks (~2.5 Hz at 30 Hz)
 SCENARIO_PARK = "park"
 SCENARIO_FOREST = "forest"
 SCENARIO_BUILDINGS = "buildings"
@@ -111,6 +116,14 @@ TRAIL_FLY_OVER_X_HALF  = 4.5    # x half-range that triggers altitude boost
 AVOIDANCE_RADIUS = 0.45
 AVOIDANCE_GAIN = 3.0
 AVOIDANCE_MAX_FORCE = 3.0
+# Building-proximity alerts (Building District).  The drone keeps its avoidance
+# AI; these only surface how close it gets so you can watch it handle buildings.
+# clearance = distance(drone, building) − building.radius  (radius includes a
+# ~0.35 m safety buffer), so clearance ≤ 0 means the drone is inside the
+# footprint = a contact/collision.
+NEAR_MISS_CLEARANCE = 1.2     # m — warn "NEAR BUILDING" below this gap
+COLLISION_CLEARANCE = -0.15   # m — at/under this the drone is touching the wall
+                              # (with avoidance on, this should rarely happen)
 FOLLOW_LEAD_MAX_METERS = 1.05
 GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
@@ -168,11 +181,35 @@ FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
 FOREST_WALK_SPEED = 0.42   # slower walk — realistic pace through dense canopy
-BUILDING_RING_MIN = 7.5
-BUILDING_RING_MAX = 12.5
+# City (Building District) — enlarged so the drone has room to roam toward
+# buildings.  Buildings sit in a ring; the ring road and footpaths scale with it.
+BUILDING_RING_MIN = 11.0
+BUILDING_RING_MAX = 17.0
+BUILDING_COUNT    = 18
 ROAD_HALF_WIDTH = 1.1
-RING_ROAD_R = 6.2
+RING_ROAD_R = 8.5
 HUMAN_STAND_Z = 0.62
+
+# City pedestrian tour — the user leaves the central plaza, walks the footpath
+# right up to one building, holds, returns, then heads to the next building, so
+# the follower drone actually approaches buildings (see city_walk).
+CITY_INNER_COUNT   = 8      # buildings on the close, walk-up-able inner ring
+CITY_VISIT_SECONDS = 16.0   # seconds per out-and-back building visit
+CITY_APPROACH_GAP  = 0.9    # how close (m) to a building wall the user stops
+# Fallback orbit (used only if the city layout wasn't recorded for some reason)
+CITY_WALK_R_MIN = 1.2
+CITY_WALK_R_MAX = 8.6
+CITY_WALK_ORBIT = 0.11
+CITY_WALK_BREATHE = 0.13
+# Approach points (np.array([x, y])) the user walks out to, one per inner
+# building, sorted by angle so the tour circles the city.  Populated by
+# spawn_buildings() when the Building District is built.
+_CITY_APPROACH: list = []
+
+
+def _set_city_approach(points):
+    global _CITY_APPROACH
+    _CITY_APPROACH = list(points)
 
 
 def figure8(t, scale=1.5):
@@ -180,6 +217,53 @@ def figure8(t, scale=1.5):
     return np.array([scale * math.cos(t) / d,
                      scale * math.sin(t) * math.cos(t) / d,
                      0.0])
+
+
+def park_walk(t):
+    """Wider figure-8 so the user actually roams the enlarged park."""
+    return figure8(t * USER_WALK_SPEED, scale=3.0)
+
+
+def _city_orbit_fallback(t):
+    """Breathing orbit used only if the city layout wasn't recorded."""
+    ang = CITY_WALK_ORBIT * t
+    breathe = 0.5 - 0.5 * math.cos(CITY_WALK_BREATHE * t)
+    r = CITY_WALK_R_MIN + (CITY_WALK_R_MAX - CITY_WALK_R_MIN) * breathe
+    return np.array([r * math.cos(ang), r * math.sin(ang), 0.0])
+
+
+def city_walk(t):
+    """City tour: walk out of the plaza along the footpath right up to a
+    building, hold, return to the plaza, then head to the next building.
+
+    Instead of staying boxed in the central plaza (old figure-8), the user now
+    visits the inner-ring buildings one after another, so the follower drone is
+    led close to each building — where its avoidance AI steers around and the
+    near-miss/collision alerts fire (see the main loop).
+    """
+    pts = _CITY_APPROACH
+    if not pts:
+        return _city_orbit_fallback(t)
+
+    n = len(pts)
+    seg    = t / CITY_VISIT_SECONDS
+    k      = int(seg) % n
+    frac   = seg - math.floor(seg)          # 0 → 1 within this visit
+    target = pts[k]
+
+    # Out-and-back with a brief hold next to the building.
+    if frac < 0.42:
+        s = frac / 0.42                     # plaza → building
+    elif frac < 0.58:
+        s = 1.0                             # hold at the building
+    else:
+        s = 1.0 - (frac - 0.58) / 0.42      # building → plaza
+    s = 0.5 - 0.5 * math.cos(math.pi * max(0.0, min(1.0, s)))   # ease in/out
+
+    # Small per-visit plaza offset so the user doesn't always pivot on dead centre.
+    home = np.array([0.5 * math.cos(2.3 * k), 0.5 * math.sin(2.3 * k)])
+    pos  = home + (target - home) * s
+    return np.array([pos[0], pos[1], 0.0])
 
 
 def forest_walk(t):
@@ -373,8 +457,8 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
     # ── Rain drops ───────────────────────────────────────────────────────────
     # Cover the full scenario (park / forest / buildings span ~15 m)
     if rain >= 0.03:
-        drop_count = int(150 + rain * 520)  # 165–670 drops
-        rain_r     = 14.0                   # half-width of rain area (m)
+        drop_count = int(90 + rain * 300)   # 90–390 drops (lighter for integrated GPUs)
+        rain_r     = 16.0                   # half-width of rain area (m) — covers the bigger city
         drop_len   = 0.90 + rain * 1.45     # 0.90–2.35 m per drop
         lw         = 2.4 + rain * 3.4       # line width
         brightness = min(1.0, 0.45 + rain * 0.90)
@@ -398,7 +482,7 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
         # Extra local curtain so rain stays visible near the active drone/user.
         if focus_xy is not None:
             fx, fy = float(focus_xy[0]), float(focus_xy[1])
-            local_count = int(80 + rain * 260)
+            local_count = int(45 + rain * 150)
             for _ in range(local_count):
                 x = fx + float(rng.uniform(-3.0, 3.0))
                 y = fy + float(rng.uniform(-3.0, 3.0))
@@ -799,7 +883,7 @@ def make_city_pedestrian(phys, pos, shirt, pants=(0.16, 0.20, 0.42),
     )
 
 
-def spawn_buildings(phys, rng, n=12):
+def spawn_buildings(phys, rng, n=BUILDING_COUNT):
     """Spawn solid buildings around the clear central flight plaza."""
     palette = [
         [0.30, 0.34, 0.42],
@@ -810,13 +894,23 @@ def spawn_buildings(phys, rng, n=12):
         [0.28, 0.33, 0.38],
     ]
     obstacles = []
+    approach = []   # (angle, point) for the close inner-ring buildings
+    n_inner = min(CITY_INNER_COUNT, n)
     for k in range(n):
-        angle = 2 * math.pi * k / n + float(rng.uniform(-0.12, 0.12))
-        radius = float(rng.uniform(BUILDING_RING_MIN, BUILDING_RING_MAX))
+        if k < n_inner:
+            # Evenly-spaced inner ring the drone can be walked up to.
+            angle = 2 * math.pi * k / n_inner + float(rng.uniform(-0.08, 0.08))
+            radius = BUILDING_RING_MIN + float(rng.uniform(0.0, 1.5))
+        else:
+            # Outer scatter — city depth / backdrop, not visited.
+            m = n - n_inner
+            angle = (2 * math.pi * (k - n_inner) / m + math.pi / m
+                     + float(rng.uniform(-0.12, 0.12)))
+            radius = float(rng.uniform(BUILDING_RING_MIN + 2.5, BUILDING_RING_MAX))
         x, y = radius * math.cos(angle), radius * math.sin(angle)
-        width = float(rng.uniform(0.45, 0.85))
-        depth = float(rng.uniform(0.45, 0.85))
-        height = float(rng.uniform(2.0, 6.0))
+        width = float(rng.uniform(0.55, 1.05))
+        depth = float(rng.uniform(0.55, 1.05))
+        height = float(rng.uniform(2.5, 8.0))
         color = palette[k % len(palette)] + [1.0]
         half = [width, depth, height / 2.0]
 
@@ -859,6 +953,15 @@ def spawn_buildings(phys, rng, n=12):
             "radius": max(width, depth) + 0.35,
         })
 
+        if k < n_inner:
+            # Stop point on the footpath ~CITY_APPROACH_GAP m from the wall.
+            d_appr = max(2.0, radius - max(width, depth) - CITY_APPROACH_GAP)
+            approach.append((angle,
+                             np.array([d_appr * math.cos(angle),
+                                       d_appr * math.sin(angle)], dtype=float)))
+
+    approach.sort(key=lambda item: item[0])
+    _set_city_approach([pt for _angle, pt in approach])
     return obstacles
 
 
@@ -870,13 +973,14 @@ def spawn_city_props(phys, rng):
     grass = (0.18, 0.42, 0.20)
     plaza_radius = 2.3
 
+    grass_r = (RING_ROAD_R + BUILDING_RING_MIN) / 2.0   # between ring road & buildings
     for quadrant in range(4):
         angle = math.pi / 4 + quadrant * math.pi / 2
-        gx, gy = 8.4 * math.cos(angle), 8.4 * math.sin(angle)
-        _flat(phys, [2.4, 2.4, 0.006], grass, gx, gy, 0.006, angle)
-        for _ in range(4):
-            tx = gx + float(rng.uniform(-1.7, 1.7))
-            ty = gy + float(rng.uniform(-1.7, 1.7))
+        gx, gy = grass_r * math.cos(angle), grass_r * math.sin(angle)
+        _flat(phys, [2.7, 2.7, 0.006], grass, gx, gy, 0.006, angle)
+        for _ in range(5):
+            tx = gx + float(rng.uniform(-2.0, 2.0))
+            ty = gy + float(rng.uniform(-2.0, 2.0))
             make_city_tree(phys, tx, ty, scale=float(rng.uniform(0.85, 1.2)))
 
     segments = 30
@@ -939,7 +1043,7 @@ def spawn_city_props(phys, rng):
     ]
     for index, color in enumerate(ped_colors):
         angle = math.pi / 5 + 2 * math.pi * index / len(ped_colors)
-        ped_radius = 3.4 + float(rng.uniform(-0.3, 1.2))
+        ped_radius = 5.2 + float(rng.uniform(-0.4, 1.6))
         make_city_pedestrian(
             phys,
             [ped_radius * math.cos(angle), ped_radius * math.sin(angle), HUMAN_STAND_Z],
@@ -968,22 +1072,27 @@ def build_park_environment(phys):
     obstacles = []
 
     # Park-like ground details give scale and depth without affecting dynamics.
+    # Enlarged so the user (park_walk) has a big lawn to roam across.
     p.changeVisualShape(plane_id, -1, rgbaColor=[0.28, 0.43, 0.25, 1], physicsClientId=phys)
-    _static_box(phys, [4.5, 0.08, 0.01], [0, 0, 0.012], [0.45, 0.42, 0.36, 1])
-    _static_box(phys, [0.08, 4.5, 0.01], [0, 0, 0.014], [0.45, 0.42, 0.36, 1])
+    _static_box(phys, [8.0, 0.10, 0.01], [0, 0, 0.012], [0.45, 0.42, 0.36, 1])
+    _static_box(phys, [0.10, 8.0, 0.01], [0, 0, 0.014], [0.45, 0.42, 0.36, 1])
 
     for x, y, sx, sy in [
-        (-3.3, 2.8, 0.35, 0.25),
-        (3.1, -2.9, 0.45, 0.30),
-        (-2.8, -3.1, 0.30, 0.32),
-        (3.4, 2.7, 0.36, 0.28),
+        (-5.6, 4.9, 0.55, 0.40),
+        (5.4, -5.0, 0.70, 0.46),
+        (-4.9, -5.4, 0.48, 0.50),
+        (5.8, 4.7, 0.56, 0.44),
+        (0.0, 6.4, 0.80, 0.36),
+        (-6.6, 0.0, 0.36, 0.80),
     ]:
         _static_box(phys, [sx, sy, 0.025], [x, y, 0.035], [0.23, 0.50, 0.21, 1])
 
-    for x, y in [(-3.6, -1.4), (-2.9, 2.1), (2.8, 1.8), (3.5, -0.8)]:
-        obstacles.append(_tree(phys, x, y, trunk_radius=0.08, trunk_height=0.9, crown_radius=0.38))
+    for x, y in [(-6.2, -2.4), (-5.0, 3.6), (4.8, 3.1), (6.1, -1.4),
+                 (-2.6, 6.0), (3.0, -6.2), (6.8, 1.8), (-6.9, 1.2)]:
+        obstacles.append(_tree(phys, x, y, trunk_radius=0.09, trunk_height=1.1, crown_radius=0.46))
 
-    for x, y, yaw in [(-1.7, 3.2, 0.0), (2.2, -3.0, math.pi / 2)]:
+    for x, y, yaw in [(-2.9, 5.5, 0.0), (3.8, -5.2, math.pi / 2),
+                      (5.2, 2.0, 0.0), (-5.4, -1.0, math.pi / 2)]:
         bench = _static_box(phys, [0.55, 0.12, 0.08], [x, y, 0.42], [0.43, 0.24, 0.12, 1])
         p.resetBasePositionAndOrientation(
             bench, [x, y, 0.42], p.getQuaternionFromEuler([0, 0, yaw]),
@@ -1045,13 +1154,13 @@ def build_building_environment(phys):
     p.changeVisualShape(plane_id, -1, rgbaColor=[0.34, 0.37, 0.39, 1], physicsClientId=phys)
 
     # Keep the centre clear for the follower, then wrap it with the city scene.
-    _flat(phys, [2.25, 2.25, 0.008], (0.29, 0.32, 0.34), 0, 0, 0.018, 0.0)
-    _flat(phys, [1.80, 0.06, 0.006], (0.86, 0.86, 0.80), 0, 0, 0.03, 0.0)
-    _flat(phys, [0.06, 1.80, 0.006], (0.86, 0.86, 0.80), 0, 0, 0.031, 0.0)
+    _flat(phys, [2.6, 2.6, 0.008], (0.29, 0.32, 0.34), 0, 0, 0.018, 0.0)
+    _flat(phys, [2.10, 0.06, 0.006], (0.86, 0.86, 0.80), 0, 0, 0.03, 0.0)
+    _flat(phys, [0.06, 2.10, 0.006], (0.86, 0.86, 0.80), 0, 0, 0.031, 0.0)
 
     rng_buildings = np.random.default_rng(7)
     rng_props = np.random.default_rng(13)
-    obstacles = spawn_buildings(phys, rng_buildings, n=14)
+    obstacles = spawn_buildings(phys, rng_buildings, n=BUILDING_COUNT)
     spawn_city_props(phys, rng_props)
     return obstacles
 
@@ -1217,6 +1326,10 @@ def scenario_user_position(scenario, t_wall):
         return forest_walk(t_wall)
     if scenario == SCENARIO_TRAIL:
         return trail_walk(t_wall)
+    if scenario == SCENARIO_BUILDINGS:
+        return city_walk(t_wall)
+    if scenario == SCENARIO_PARK:
+        return park_walk(t_wall)
     return figure8(t_wall * USER_WALK_SPEED)
 
 
@@ -1323,6 +1436,81 @@ def update_drone_parts(phys, parts, drone_pos, rotor_angle):
         p.resetBasePositionAndOrientation(
             part["id"], part_pos.tolist(), quat, physicsClientId=phys,
         )
+
+
+# ── Drone umbrella (the shade canopy) ─────────────────────────────────────────
+# A proper umbrella that visibly OPENS when the Sub-3 SVM says DEPLOY and folds
+# CLOSED when it says STOW.  Visual-only (no collision) so it never snags on a
+# building.  Two part groups share one pole:
+#   • "open"   — wide canopy disc + domed cap + 8 ribs + finial (rain)
+#   • "closed" — a slim folded wrap along the pole (dry)
+#   • "always" — the pole itself
+_UMB_CANOPY    = [0.20, 0.62, 0.78, 1.0]   # teal canopy
+_UMB_RIB       = [0.13, 0.45, 0.58, 1.0]   # darker ribs / folded wrap
+_UMB_POLE      = [0.20, 0.20, 0.22, 1.0]
+_UMB_FINIAL    = [0.90, 0.90, 0.93, 1.0]
+
+
+def make_umbrella(phys):
+    """Build the openable umbrella rig.  Returns a dict with a flat part list."""
+    parts = []   # each: {"id", "offset", "yaw", "group", "rgba"}
+
+    def _add(body_id, offset, group, rgba, yaw=0.0):
+        parts.append({"id": body_id, "offset": np.array(offset, dtype=float),
+                      "yaw": yaw, "group": group, "rgba": list(rgba)})
+
+    # Central pole (always visible)
+    _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_POLE, [0, 0, 0],
+                      radius=0.022, length=0.52),
+         [0.0, 0.0, 0.18], "always", _UMB_POLE)
+
+    # Open canopy: wide disc + smaller domed cap + finial
+    _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_CANOPY, [0, 0, 0],
+                      radius=0.64, length=0.05),
+         [0.0, 0.0, 0.44], "open", _UMB_CANOPY)
+    _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_CANOPY, [0, 0, 0],
+                      radius=0.34, length=0.10),
+         [0.0, 0.0, 0.50], "open", _UMB_CANOPY)
+    _add(_visual_body(phys, p.GEOM_SPHERE, _UMB_FINIAL, [0, 0, 0], radius=0.035),
+         [0.0, 0.0, 0.58], "open", _UMB_FINIAL)
+
+    # Open ribs: 8 thin boxes radiating to the rim
+    for k in range(8):
+        ang = 2 * math.pi * k / 8
+        _add(_visual_body(phys, p.GEOM_BOX, _UMB_RIB, [0, 0, 0],
+                          halfExtents=[0.34, 0.013, 0.013]),
+             [0.30 * math.cos(ang), 0.30 * math.sin(ang), 0.435], "open",
+             _UMB_RIB, yaw=ang)
+
+    # Folded wrap shown when stowed
+    _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_RIB, [0, 0, 0],
+                      radius=0.06, length=0.58),
+         [0.0, 0.0, 0.40], "closed", _UMB_RIB)
+
+    return {"parts": parts}
+
+
+def update_umbrella(phys, umb, drone_pos):
+    """Keep every umbrella part anchored above the drone."""
+    base = np.array(drone_pos, dtype=float)
+    for prt in umb["parts"]:
+        pos  = (base + prt["offset"]).tolist()
+        quat = (p.getQuaternionFromEuler([0, 0, prt["yaw"]])
+                if prt["yaw"] else [0, 0, 0, 1])
+        p.resetBasePositionAndOrientation(prt["id"], pos, quat,
+                                          physicsClientId=phys)
+
+
+def set_umbrella_open(phys, umb, deployed: bool):
+    """Show the open canopy when deployed, the folded wrap when stowed."""
+    for prt in umb["parts"]:
+        group = prt["group"]
+        visible = (group == "always"
+                   or (group == "open" and deployed)
+                   or (group == "closed" and not deployed))
+        rgba = list(prt["rgba"])
+        rgba[3] = rgba[3] if visible else 0.0
+        p.changeVisualShape(prt["id"], -1, rgbaColor=rgba, physicsClientId=phys)
 
 
 def create_person(phys):
@@ -2022,6 +2210,7 @@ class TrainingGroundsHub:
         self._auto_stage_started_at = None
         self._auto_failed_msg = ""
         self._auto_on_complete = None   # callback when all done
+        self._auto_scenario    = None   # train Sub-4 nav on this scenario's layout
         self._auto_banner_var  = None   # StringVar for top banner
         self._auto_total_steps = [50_000, 0, 0, 12_000]  # quick auto-train steps
 
@@ -2405,7 +2594,8 @@ class TrainingGroundsHub:
 
     # ── Auto-Train sequence ───────────────────────────────────────────────────
 
-    def start_auto_train(self, retrain: bool = False, stages=None, on_complete=None):
+    def start_auto_train(self, retrain: bool = False, stages=None,
+                         on_complete=None, scenario=None):
         """Fully-automatic sequential training.
 
         Stages (pass a set to run only specific ones):
@@ -2413,12 +2603,17 @@ class TrainingGroundsHub:
           1 — Sub-3 Weather SVM  always < 5 sec
           2 — Sub-4 Battery MDP  always < 2 sec
           3 — Sub-4 Nav SAC      skip if trained, otherwise 12k quick steps
+
+        `scenario` makes Sub-4 Nav SAC train on that launch scenario's obstacle
+        layout (city / park / forest / trail), so the nav policy is tuned to the
+        world it will fly in.
         """
         if self._auto_stage >= 0:
             return  # already running
 
         self._auto_stages      = set(stages) if stages is not None else {0, 1, 2, 3}
         self._auto_retrain     = retrain
+        self._auto_scenario    = scenario
         self._auto_stage       = 0
         self._auto_started     = False
         self._auto_stage_started_at = None
@@ -2535,7 +2730,7 @@ class TrainingGroundsHub:
                     self._show_auto_complete()
                     return
                 self._nav_steps_var.set(str(self._auto_total_steps[3]))
-                self._start_nav()
+                self._start_nav(scenario=self._auto_scenario)
                 self._auto_started = True
                 self._auto_stage_started_at = time.time()
                 self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[3]}")
@@ -3614,7 +3809,7 @@ class TrainingGroundsHub:
         self._nav_status_var.set("Deleted previous model — starting from scratch…")
         self._start_nav()
 
-    def _start_nav(self):
+    def _start_nav(self, scenario=None):
         if self._nav_training:
             return
         from sub4_nav.nav_training_worker import NavTrainingWorker
@@ -3627,7 +3822,8 @@ class TrainingGroundsHub:
         self._nav_viz  = None
         self._nav_step = 0
         self._nav_stop.clear()
-        self._nav_thread = NavTrainingWorker(total, self._nav_queue, self._nav_stop)
+        self._nav_thread = NavTrainingWorker(total, self._nav_queue, self._nav_stop,
+                                             scenario=scenario)
         self._nav_thread.start()
         self._nav_training   = True
         self._nav_efficiency = ""
@@ -4438,8 +4634,14 @@ class ScenarioLauncher:
             self.training_hub = TrainingGroundsHub(self.root)
         else:
             self.training_hub.window.lift()
+        scenario = None
+        try:
+            scenario = self.scenario_var.get()
+        except (AttributeError, tk.TclError):
+            pass
         self.training_hub.start_auto_train(retrain=retrain,
-                                            on_complete=self._on_auto_train_complete)
+                                            on_complete=self._on_auto_train_complete,
+                                            scenario=scenario)
 
     def _on_auto_train_complete(self):
         """Called by the hub when all auto-training is done."""
@@ -5898,7 +6100,7 @@ def run(
             )
         elif scenario == SCENARIO_BUILDINGS:
             p.resetDebugVisualizerCamera(
-                cameraDistance=12.0, cameraYaw=42, cameraPitch=-31,
+                cameraDistance=19.0, cameraYaw=42, cameraPitch=-33,
                 cameraTargetPosition=[0, 0, 1.4],
                 physicsClientId=phys,
             )
@@ -5910,7 +6112,7 @@ def run(
             )
         else:
             p.resetDebugVisualizerCamera(
-                cameraDistance=7, cameraYaw=30, cameraPitch=-25,
+                cameraDistance=11, cameraYaw=30, cameraPitch=-27,
                 cameraTargetPosition=[0, 0, 1],
                 physicsClientId=phys,
             )
@@ -5933,20 +6135,12 @@ def run(
     )
     person_parts = create_person(phys)
 
-    # Umbrella disc (flat cylinder above the drone)
-    umb_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.7, height=0.04,
-                                     physicsClientId=phys)
-    umb_vis = p.createVisualShape(p.GEOM_CYLINDER, radius=0.7, length=0.04,
-                                  rgbaColor=[0.5, 0.5, 0.5, 0.4], physicsClientId=phys)
-    umb_id  = p.createMultiBody(baseMass=0,
-                                baseCollisionShapeIndex=umb_col,
-                                baseVisualShapeIndex=umb_vis,
-                                basePosition=[
-                                    initial_user_pos[0],
-                                    initial_user_pos[1],
-                                    TARGET_ALTITUDE + 0.35,
-                                ],
-                                physicsClientId=phys)
+    # Openable shade umbrella above the drone (opens on DEPLOY, folds on STOW)
+    umbrella_rig = make_umbrella(phys)
+    update_umbrella(phys, umbrella_rig,
+                    [initial_user_pos[0], initial_user_pos[1],
+                     TARGET_ALTITUDE + 0.30])
+    set_umbrella_open(phys, umbrella_rig, False)   # starts folded (dry)
 
     # Settle with hover thrust
     for _ in range(30):
@@ -5996,6 +6190,13 @@ def run(
     _stats_umb      = []   # umbrella state per tick (1=deploy, 0=stow)
     _stats_umb_need = []   # should umbrella be deployed? mirrors Sub-3 label threshold
     _stats_in_hover = []   # 1 if drone within 0.5m of user, else 0
+
+    # ── Building-proximity tracking (city) ───────────────────────────────────
+    _collision_count    = 0            # times the drone entered a building footprint
+    _near_miss_count    = 0            # times it got within NEAR_MISS_CLEARANCE
+    _in_collision       = False        # debounce: one event per entry
+    _in_near            = False
+    _min_building_clear = float("inf")  # closest the drone ever got (m)
 
     # Downsampled series for persistent history (1 sample per second)
     _hist_series: dict = {"confidence": [], "hover_error": [], "battery": [], "umbrella": []}
@@ -6181,8 +6382,7 @@ def run(
                 umbrella_cmd = "DEPLOY" if cmd_int else "STOW"
                 deployed     = cmd_int == 1
                 if deployed != umb_deployed:
-                    col = [0.1, 0.8, 0.2, 0.85] if deployed else [0.5, 0.5, 0.5, 0.4]
-                    p.changeVisualShape(umb_id, -1, rgbaColor=col, physicsClientId=phys)
+                    set_umbrella_open(phys, umbrella_rig, deployed)
                     umb_deployed = deployed
                 # Event: umbrella state changed
                 if umbrella_cmd != _prev_umbrella_cmd and _prev_umbrella_cmd is not None:
@@ -6266,13 +6466,49 @@ def run(
             # Keep umbrella attached to drone
             d_pos2, _ = p.getBasePositionAndOrientation(drone_id, physicsClientId=phys)
             update_drone_parts(phys, drone_parts, d_pos2, t_wall * 35.0)
-            p.resetBasePositionAndOrientation(
-                umb_id,
-                [d_pos2[0], d_pos2[1], d_pos2[2] + 0.35],
-                [0, 0, 0, 1], physicsClientId=phys,
-            )
+            update_umbrella(phys, umbrella_rig,
+                            [d_pos2[0], d_pos2[1], d_pos2[2] + 0.30])
 
-            if False and gui and tick % 15 == 0:  # weather visuals disabled (too slow on integrated GPU)
+            # ── Building-proximity alerts (city only) ─────────────────────────
+            # The avoidance AI still runs; this just reports how close the drone
+            # gets so you can watch what it does near a building.
+            if scenario == SCENARIO_BUILDINGS and obstacles:
+                _d_xy = np.array(d_pos2[:2], dtype=float)
+                _min_clear = min(
+                    float(np.linalg.norm(_d_xy - o["position"]) - o["radius"])
+                    for o in obstacles)
+                _min_building_clear = min(_min_building_clear, _min_clear)
+                if _min_clear <= COLLISION_CLEARANCE:
+                    if not _in_collision:
+                        _collision_count += 1
+                        _in_collision = True
+                        _in_near = True
+                        print(f"\n  {_RD}{_B}[Collision]{_R} drone CONTACTED a "
+                              f"building (#{_collision_count})  clearance "
+                              f"{_min_clear:+.2f} m — avoidance couldn't fully clear it")
+                    if gui:
+                        p.addUserDebugText(
+                            "COLLISION", [d_pos2[0], d_pos2[1], d_pos2[2] + 0.85],
+                            textColorRGB=[1.0, 0.25, 0.20], textSize=1.7,
+                            lifeTime=0.6, physicsClientId=phys)
+                elif _min_clear < NEAR_MISS_CLEARANCE:
+                    _in_collision = False
+                    if not _in_near:
+                        _near_miss_count += 1
+                        _in_near = True
+                        print(f"\n  {_YL}[Near miss]{_R} drone within "
+                              f"{_min_clear:.2f} m of a building "
+                              f"(#{_near_miss_count}) — avoidance steering around")
+                    if gui:
+                        p.addUserDebugText(
+                            "NEAR BUILDING", [d_pos2[0], d_pos2[1], d_pos2[2] + 0.85],
+                            textColorRGB=[1.0, 0.80, 0.20], textSize=1.4,
+                            lifeTime=0.5, physicsClientId=phys)
+                else:
+                    _in_collision = False
+                    _in_near = False
+
+            if gui and WEATHER_VISUALS and tick % WEATHER_VIS_EVERY == 0:
                 focus_xy = (
                     (np.array(d_pos2[:2], dtype=float) + user_pos[:2]) * 0.5
                 )
@@ -6392,6 +6628,16 @@ def run(
         print(f"  Sub-4  Battery at end   : {battery_pct:5.1f}%  "
               + _grade(battery_pct, 30, 10)(
                   f"({'✓ safe' if battery_pct >= 30 else '~ low' if battery_pct >= 10 else '✗ critical'})"))
+        if scenario == SCENARIO_BUILDINGS:
+            _clear_txt = ("n/a" if _min_building_clear == float("inf")
+                          else f"{_min_building_clear:+.2f} m")
+            _bld_grade = (_bad if _collision_count else
+                          _warn if _near_miss_count else _ok)
+            print(f"  Bldg   Near-miss/collide : "
+                  f"{_near_miss_count} near / {_collision_count} hit  "
+                  + _bld_grade(
+                      f"(closest {_clear_txt}; "
+                      f"{'✗ hit a building' if _collision_count else '✓ avoided all' if not _near_miss_count else '~ flew close, avoided'})"))
         print("═" * 60)
 
         overall = (hover_pct + mean_conf*100 + umb_acc_pct) / 3
@@ -6420,6 +6666,10 @@ def run(
             "battery_end_pct": float(battery_pct),
             "overall_pct": float(overall),
             "grade": grade,
+            "building_near_misses": int(_near_miss_count),
+            "building_collisions": int(_collision_count),
+            "closest_building_m": (None if _min_building_clear == float("inf")
+                                   else float(_min_building_clear)),
             "created_at": time.time(),
         }
         with open(os.path.join(reports_dir, "run_summary_latest.json"), "w", encoding="utf-8") as f:
@@ -6793,7 +7043,8 @@ class ScenarioCompleteDialog:
         self.root.withdraw()
         hub = TrainingGroundsHub(self.root)
         hub.start_auto_train(retrain=True, stages=stages,
-                             on_complete=lambda: self._on_hub_done(hub))
+                             on_complete=lambda: self._on_hub_done(hub),
+                             scenario=self._selected_scenario)
 
     def _on_hub_done(self, hub):
         hub.close()

@@ -31,6 +31,13 @@ import numpy as np
 
 _MODELS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
 
+# TensorBoard event logs land in <repo>/runs/ (already git-ignored).  Override
+# with SKYSHADE_TB_DIR, or disable entirely with SKYSHADE_TB=0.
+_TB_DIR = (None if os.environ.get("SKYSHADE_TB", "1") == "0"
+           else os.environ.get(
+               "SKYSHADE_TB_DIR",
+               os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs")))
+
 # Curriculum thresholds (cumulative env steps across all parallel workers)
 _STAGE2_STEPS = 200_000
 _STAGE3_STEPS = 400_000
@@ -86,6 +93,9 @@ class FlightTrainingWorker(threading.Thread):
                     self_.training_env.env_method("set_stage", stage)
                     buf    = self_.model.ep_info_buffer
                     mean_r = float(np.mean([ep["r"] for ep in buf])) if buf else 0.0
+                    # Domain metrics for TensorBoard (alongside SB3's built-ins).
+                    self_.logger.record("flight/mean_reward", mean_r)
+                    self_.logger.record("flight/curriculum_stage", stage)
                     q_ref.put(("progress", n, stage, mean_r))
 
             np.random.seed(0)
@@ -118,6 +128,7 @@ class FlightTrainingWorker(threading.Thread):
                 model = PPO.load(self.OUTPUT_PATH, env=env,
                                  learning_rate=1e-4,
                                  clip_range=0.15)
+                model.tensorboard_log = _TB_DIR   # saved models don't carry this
                 q_ref.put(("progress", 0, 1, 0.0))
             else:
                 model = PPO(
@@ -132,6 +143,7 @@ class FlightTrainingWorker(threading.Thread):
                     ent_coef      = 0.01,
                     policy_kwargs = {"net_arch": [256, 256]},
                     seed=0, verbose=0,
+                    tensorboard_log = _TB_DIR,
                 )
 
             cb = _Callback()
@@ -140,6 +152,7 @@ class FlightTrainingWorker(threading.Thread):
                 callback           = cb,
                 progress_bar       = False,
                 reset_num_timesteps= not warm,
+                tb_log_name        = "sub2_flight_PPO",
             )
             env.close()
 
