@@ -73,7 +73,7 @@ LOW_BATTERY_DEMO_START = 10.0
 LOW_BATTERY_DEMO_DRAIN_RATE = 1.0
 RUNTIME_PID_DAMPING = 0.5
 WIND_FORCE_SCALE    = 0.35   # N per m/s of weather wind pushed on the drone
-USER_WALK_SPEED    = 0.2    # rad/s for figure-8 (gentle, relaxed walking pace)
+USER_WALK_SPEED    = 0.12   # rad/s for figure-8 (slow stroll so the drone keeps up)
 HOVER_RADIUS       = 0.5    # m
 WEATHER_MIN_SECONDS = 8.0
 WEATHER_MAX_SECONDS = 20.0
@@ -105,7 +105,7 @@ SCENARIO_DESCRIPTIONS = {
 }
 
 # ── Urban Trail scenario constants ────────────────────────────────────────────
-TRAIL_WALK_SPEED       = 0.40    # m/s — steady walk along the trail
+TRAIL_WALK_SPEED       = 0.26    # m/s — slow walk along the trail
 TRAIL_LENGTH           = 26.0    # metres end to end before looping
 TRAIL_START_X          = -13.0
 TRAIL_END_X            = 13.0
@@ -182,7 +182,7 @@ def _append_run_history(entry, max_kept=20):
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
-FOREST_WALK_SPEED = 0.32   # slower walk — realistic pace through dense canopy
+FOREST_WALK_SPEED = 0.20   # slow walk — realistic pace through dense canopy
 # City (Building District) — enlarged so the drone has room to roam toward
 # buildings.  Buildings sit in a ring; the ring road and footpaths scale with it.
 BUILDING_RING_MIN = 11.0
@@ -196,7 +196,7 @@ HUMAN_STAND_Z = 0.62
 # right up to one building, holds, returns, then heads to the next building, so
 # the follower drone actually approaches buildings (see city_walk).
 CITY_INNER_COUNT   = 8      # buildings on the close, walk-up-able inner ring
-CITY_VISIT_SECONDS = 24.0   # seconds per out-and-back building visit (relaxed pace)
+CITY_VISIT_SECONDS = 36.0   # seconds per out-and-back building visit (slow stroll)
 CITY_APPROACH_GAP  = 0.9    # how close (m) to a building wall the user stops
 # Fallback orbit (used only if the city layout wasn't recorded for some reason)
 CITY_WALK_R_MIN = 1.2
