@@ -49,6 +49,10 @@ class Tracker:
         self._occlusion_count = 0  # Frames since last valid detection
         self._last_confidence = 0.0
 
+        # Exposed for the visual servo in the sim loop:
+        # pixel coordinates (cx, cy) of the last detected centroid, or None.
+        self.pixel_centroid: tuple = None
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def process_frame(self, rgb_frame: np.ndarray):
@@ -62,6 +66,7 @@ class Tracker:
         confidence: float in [0, 1]
         """
         centroid, apparent_width_px, area_px2 = self._detect_marker(rgb_frame)
+        self.pixel_centroid = centroid  # expose for visual servo (None when lost)
 
         if centroid is not None:
             # Valid detection — compute 3-D offset

@@ -36,8 +36,8 @@ class FlightControlResult:
 def lead_follow_target(
     user_pos,
     user_velocity,
-    lead_seconds: float = 0.25,
-    max_lead_m: float = 0.35,
+    lead_seconds: float = 0.5,
+    max_lead_m: float = 0.7,
     target_altitude: float = TARGET_ALTITUDE,
 ) -> np.ndarray:
     """Return a hover target almost directly above the walking user."""
@@ -109,6 +109,9 @@ class RuntimeFlightController:
         self.ppo_policy = None
         self.q_policy = None
         self.fallback_reason = None
+        # Lead-follow params — tuned per scenario via tune_pid_for_forest()
+        self._lead_seconds = 0.5
+        self._max_lead_m   = 0.7
 
         if self.requested_mode == "ppo":
             try:
@@ -149,11 +152,19 @@ class RuntimeFlightController:
         self.pid.reset()
 
     def tune_pid_for_forest(self):
-        """Use stronger lateral gains for the long forest trail."""
-        self.pid.KP_XY = 13.0
-        self.pid.KI_XY = 0.15
-        self.pid.KD_XY = 7.0
-        self.pid.MAX_FORCE_XY = 15.0
+        """Conservative tuning for the winding forest trail.
+
+        The trail changes direction constantly so a large look-ahead causes the
+        drone to chase a phantom point that keeps shifting, creating oscillation.
+        We zero the look-ahead (follow directly above the user) and use moderate
+        gains to stay stable through tight turns.
+        """
+        self.pid.KP_XY = 20.0
+        self.pid.KI_XY = 0.06
+        self.pid.KD_XY = 11.0
+        self.pid.MAX_FORCE_XY = 22.0
+        self._lead_seconds = 0.0   # no look-ahead — trail direction changes too fast
+        self._max_lead_m   = 0.0
 
     def target_for_override(
         self,
@@ -161,12 +172,16 @@ class RuntimeFlightController:
         drone_pos,
         user_pos,
         user_velocity,
+        altitude: float = TARGET_ALTITUDE,
     ) -> np.ndarray:
         if nav_override == "LAND_NOW":
             return np.array([drone_pos[0], drone_pos[1], 0.3], dtype=float)
         if nav_override == "RTH":
-            return np.array([0.0, 0.0, TARGET_ALTITUDE], dtype=float)
-        return lead_follow_target(user_pos, user_velocity)
+            return np.array([0.0, 0.0, altitude], dtype=float)
+        return lead_follow_target(user_pos, user_velocity,
+                                  lead_seconds=self._lead_seconds,
+                                  max_lead_m=self._max_lead_m,
+                                  target_altitude=altitude)
 
     def compute_force(
         self,
@@ -177,17 +192,20 @@ class RuntimeFlightController:
         nav_override: str,
         wind_speed: float,
         dt: float,
+        altitude_override: float = None,
     ) -> FlightControlResult:
         """Compute corrective force, excluding constant hover thrust."""
         from sub2_flight.env.ppo_hover_env import OBS_LOW, OBS_HIGH
 
         drone_pos = np.array(drone_pos, dtype=float)
         drone_vel = np.array(drone_vel, dtype=float)
-        target = self.target_for_override(nav_override, drone_pos, user_pos, user_velocity)
+        target_alt = altitude_override if altitude_override is not None else TARGET_ALTITUDE
+        target = self.target_for_override(nav_override, drone_pos, user_pos, user_velocity,
+                                          altitude=target_alt)
 
         # ── PPO path ──────────────────────────────────────────────────────────
         if self.ppo_policy is not None and nav_override != "LAND_NOW":
-            target_3d = np.array([target[0], target[1], TARGET_ALTITUDE], dtype=float)
+            target_3d = np.array([target[0], target[1], target_alt], dtype=float)
             delta = drone_pos - target_3d
             obs = np.array([
                 delta[0], delta[1], delta[2],
@@ -204,7 +222,7 @@ class RuntimeFlightController:
             lateral_error = float(np.linalg.norm(delta[:2]))
             assist = float(np.clip((lateral_error - 0.10) / 0.45, 0.65, 1.0))
             force = (1.0 - assist) * ppo_force + assist * pid_force
-            force = np.clip(force, -12.0, 12.0)
+            force = np.clip(force, -20.0, 20.0)
 
             dist3d = float(np.linalg.norm(drone_pos - target_3d))
             reward = 5.0 if dist3d <= HOVER_RADIUS_M else max(-5.0, -dist3d)
@@ -227,7 +245,7 @@ class RuntimeFlightController:
             action = self.q_policy.select_action(state)
             force = action_to_force(action)
 
-            target_hover = np.array([target[0], target[1], TARGET_ALTITUDE], dtype=float)
+            target_hover = np.array([target[0], target[1], target_alt], dtype=float)
             dist3d = float(np.linalg.norm(drone_pos - target_hover))
             lat_speed = float(np.hypot(drone_vel[0], drone_vel[1]))
             reward = (5.0 if dist3d <= HOVER_RADIUS_M else max(-5.0, -dist3d))

@@ -5,11 +5,11 @@
 | Dependency | Version |
 |---|---|
 | Python | 3.10+ |
-| ROS 2 | Humble or later |
 | PyBullet | latest |
 | PyTorch | 2.x (CPU build) |
 | Stable-Baselines3 | 2.x |
 | Gymnasium | 1.x |
+| OpenCV | 4.x |
 
 Install Python dependencies:
 
@@ -19,171 +19,185 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Build the ROS 2 workspace:
-
-```bash
-cd ros2_ws
-colcon build
-source install/setup.bash
-cd ..
-```
-
 ---
 
 ## Step 1 — Train the models (required before first launch)
 
-The launcher checks for trained models and blocks the sim if they are missing. Open the launcher first:
-
 ```bash
-python run_sim.py
-```
-
-Click each training card and train before launching:
-
-| Card button | Opens | Time |
-|---|---|---|
-| **Calibrate** (Sub-1) | Live calibration check — no training needed | Instant |
-| **Train PPO** (Sub-2) | PPO hover training — 3D room with quadcopter drone | ~8 min first run |
-| **Solve MDP** (Sub-4) | Battery-safety value iteration | < 1 sec |
-| **Train Navigation** (Sub-4 tab) | PPO obstacle navigation | ~3 min first run |
-
-**Warm-start:** Every subsequent training run automatically loads the existing model and fine-tunes it — shorter LR, continued curriculum. You do not need to train from scratch again. Each repeated run improves the model.
-
-After training completes the status bar shows:
-```
-✓ Model trained — predicted hover efficiency ~73%  (fine-tuned from previous model)
-```
-
-To validate the model before launching, click **Evaluate Model** in the Sub-2 or Sub-4 tab — it runs 5 test episodes and draws the best path as a green trail in the 3D view.
-
----
-
-## Step 2 — Launch the simulation
-
-### Full integrated simulation (GUI)
-
-```bash
-# If you activated the venv (recommended):
-python run_sim.py
-
-# Or use python3 directly (no venv activation needed):
 python3 run_sim.py
 ```
 
-> **Note:** `python` may not be found on some systems — use `python3`. If your venv is active (`source venv/bin/activate`), both `python` and `python3` work.
+The launcher opens. Click **🚀 Auto-Train All** to train everything in one step (~3 min), or use the individual subsystem cards. See [Training Grounds](Training-Grounds) for details.
 
-A PyBullet window opens with the drone, user, and environment. A HUD overlay shows battery, nav override, umbrella state, tracking confidence, hover error, and altitude.
+---
 
-**Options:**
+## Step 2 — Launch a scenario
 
-```bash
-python run_sim.py --duration 60            # run for 60 s
-python run_sim.py --no-gui                 # headless (no PyBullet window)
-python run_sim.py --scenario forest        # forest path with tree avoidance
-python run_sim.py --scenario buildings     # urban block with obstacles
-python run_sim.py --flight pid             # force PID controller (ignore PPO)
-python run_sim.py --demo-low-battery       # trigger RTH early for testing
-```
-
-### Via ROS 2 launch
+After training, select a scenario in the launcher and click **Launch**. A subprocess starts with the PyBullet window, the Drone POV dashboard, and the Telemetry Dashboard.
 
 ```bash
-# From ros2_ws with workspace sourced
-ros2 launch skyshade skyshade_sim.launch.py
-```
+# Direct launch (bypasses launcher)
+python3 run_sim.py --scenario park       # Park (default)
+python3 run_sim.py --scenario forest     # Forest Trail
+python3 run_sim.py --scenario buildings  # Building District
+python3 run_sim.py --scenario trail      # Urban Trail (bridge + crowd)
 
-### Individual nodes (development)
-
-```bash
-ros2 run skyshade perception_node
-ros2 run skyshade flight_node
-ros2 run skyshade env_decision_node
-ros2 run skyshade nav_safety_node
+# Options
+python3 run_sim.py --duration 60         # run for 60 s (default 120)
+python3 run_sim.py --flight pid          # force PID (ignore PPO)
+python3 run_sim.py --demo-low-battery    # trigger RTH quickly for testing
+python3 run_sim.py --no-gui              # headless, no PyBullet window
 ```
 
 ---
 
-## What to expect
+## Scenarios
 
-- The blue quadcopter hovers above the red sphere (user) at 2.5 m altitude
-- The user walks a figure-8 path; the drone follows using the PPO policy
-- The telemetry dashboard shows live AI evidence: marker tracking, avoidance force, battery, umbrella decision
-- Battery drains at 0.5% per second; the Sub-4 MDP triggers RTH when battery falls below the safe threshold
+### Park (default)
+Open park with benches, small trees, and a figure-8 walking path. Best for first runs and PPO training validation. The drone follows the user on a smooth closed loop.
+
+### Forest Trail
+Dense tree canopy with a 18 m dirt trail. The user walks at 0.42 m/s; the drone must avoid trunks while keeping the red cap marker in view through gaps in the canopy. The trail resets (drone teleports) when the user completes a lap.
+
+**Key challenge:** tracker lock drops when the canopy closes overhead. The red marker disk (30 cm radius) is deliberately large to compensate.
+
+### Building District
+City plaza surrounded by tall buildings, a ring road with parked cars and buses, park corners with trees, and pedestrians in non-red clothing. The flight zone is the clear plaza centre.
+
+### Urban Trail *(new)*
+A 26 m paved trail (loops) with:
+
+| Feature | Detail |
+|---|---|
+| **Bridge / underpass** | Centred at x=0, 5.6 m wide interior, 3.0 m deck height. The drone's normal hover altitude is 2.5 m — it would collide with the deck. |
+| **Fly-over logic** | When the drone or user enters the ±4.5 m bridge zone, the target altitude jumps to 5.5 m. The drone climbs over, clears the bridge, and descends back to 2.5 m. |
+| **8 crowd pedestrians** | Non-red shirts (blue, green, grey, teal, purple, seafoam, brown). Added to the collision obstacle list so the drone steers around them. Sub-1 tracker ignores them because they have no red marker. |
+| **Terminal events** | `[Bridge] fly-over ACTIVE` / `CLEAR` printed when the zone is entered/exited. |
+
+---
+
+## What to expect during a run
+
+- The drone hovers at **2.5 m** above the user, following via the PPO+PID controller
+- Battery drains at **0.5% / sec**; Sub-4 MDP triggers **RTH** when battery falls to the threshold
 - The umbrella disc turns green on `DEPLOY`, grey on `STOW`
-- The terminal logs a row every 5 seconds showing: `Time  Bat  Nav  Flight  Umbrella  Conf  ErrXY  Z`
-- **After the simulation ends**, the terminal prints a full **Efficiency Report** with grades for each subsystem — see [Validation and Results](Validation-and-Results) for how to read it
+- Weather cycles automatically every 8–20 s between Cloudy / Light rain / Full rain
 
-### Weather cycle and visuals
+### Drone POV & AI Evidence window
 
-Weather cycles automatically through four phases over ~60 s:
+Displays:
+- **Camera feed** (1280 × 720 upscaled) with HSV detection overlay: green bounding box on the red marker, white crosshair
+- **Weather rain/wind overlay** on the camera image — number of streaks scales with intensity, angle follows wind direction
+- **5 live graphs** in a 3-col × 2-row grid: Sub-1 confidence, Sub-2 hover error, Sub-2 avoidance force, Sub-4 battery, Sub-3 umbrella decision
+- **Ghost lines** (dashed, faded) of the last 5 runs overlaid on each graph — compare current vs. history at a glance
+- **Performance trend bar chart** at the bottom showing overall% per historical run with a smoothed trend line
 
-| Phase | Lux | Rain | Wind | Visual effects in PyBullet |
-|---|---|---|---|---|
-| **Clear ☀** | High | 0 | Low | No clouds, no rain |
-| **Cloudy ⛅** | Medium | Trace | Medium | 7 grey clouds across the horizon |
-| **Rainy 🌧** | Low | 0.3–0.7 | Moderate | 80–250 animated rain drops across 14×14 m, 9 dark storm clouds, wind streaks |
-| **Storm ⛈** | Very low | > 0.7 | High | Dense rain, ground-level mist wisps near the floor, strong wind streamers |
+### Terminal output
 
-**Wind streamers** appear whenever wind ≥ 1.5 m/s — horizontal grey-blue streaks showing wind direction and speed. They slowly rotate so the wind direction changes over time.
+The terminal prints colour-coded events as they happen (not just on the 5-second interval):
 
-The Sub-3 SVM reads the weather sensors every second and decides `DEPLOY`/`STOW` for the umbrella canopy.
+| Event tag | Fires when |
+|---|---|
+| `[Weather]` | Weather mode switches (e.g. Cloudy → Full rain) |
+| `[Sub-3 Umbrella]` | Umbrella toggles DEPLOY ↔ STOW |
+| `[Sub-4 Nav]` | Nav override changes CONTINUE → RTH → LAND_NOW |
+| `[Sub-4 Battery]` | Battery crosses 50%, 30%, or 10% threshold |
+| `[Bridge]` | Drone enters or exits the Urban Trail bridge zone |
+| `[Sub-1 Tracker]` | Tracker confidence crosses the lock/lost threshold |
 
-### Via ROS 2 launch (advanced)
+Every 5 seconds a coloured table row is also printed:
 
-The ROS 2 launch approach starts separate processes for each subsystem node. It requires the subsystem packages to be on the Python path:
-
-```bash
-cd /home/slal/ros2_ws
-colcon build
-source install/setup.bash
-export PYTHONPATH=$PYTHONPATH:/home/slal/ros2_ws/src/SkyShade
-ros2 launch skyshade skyshade_sim.launch.py
+```
+  Time   Battery     Nav       Flight    Umbrella   Conf     Err    Alt   Progress
+     0.0s  100.0%  CONTINUE    PPO+PID    stow      1.00   0.00m  2.50m  [░░░░░░░░░░░░]    0%
+    32.1s   83.9%  CONTINUE    PPO+PID    DEPLOY    1.00   0.87m  2.50m  [███░░░░░░░░░]   27%
 ```
 
-> For most users, `python3 run_sim.py` is simpler and fully equivalent.
+Colours: **green** = healthy/good, **amber** = watch, **red** = critical.
 
 ---
 
-## CLI training (without the GUI hub)
+## After the simulation — Simulation Complete dialog
 
-```bash
-# Sub-2 PPO hover
-python sub2_flight/train_ppo.py --steps 500000 --output models/ppo_flight_v1
+When the scenario finishes (or when you close the dashboard), the **Simulation Complete** dialog appears instead of the process just exiting.
 
-# Sub-4 battery MDP
-python sub4_nav/solve_mdp.py --gamma 0.95 --output models/policy_table_v1.npy
 ```
+┌─ Simulation Complete ────────────────────────────────────────────┐
+│ Scenario: Park · 120 s · Flight: PPO                             │
+│                                                                  │
+│ Post-Run Efficiency Report  —  tick subsystems to retrain        │
+│ ──────────────────────────────────────────────────────────────   │
+│   [ ] Sub-1  Tracker lock       93.1%   ✓ reliable              │
+│   [✓] Sub-2  Hover accuracy     37.2%   ✗ train more  ← auto    │
+│           Mean hover error       0.59 m  ~ close                 │
+│   [ ] Sub-3  Umbrella correct   91.4%   ✓ accurate              │
+│   [ ] Sub-4  Battery MDP + Nav  40.1% left ✓ safe              │
+│ ──────────────────────────────────────────────────────────────   │
+│  Overall score:  74%    Grade: B                                  │
+│  → Sub-2 PPO needs more hover training                           │
+│  ┌─ Performance trend (5 runs) ──────────────────────────────┐   │
+│  │  70 ██  71 ██  32 ██  40 ██  74 ██   ← bars + trend line │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  Run next scenario:  [Park]  [Forest Trail]  [Buildings]  [Trail]│
+│                                                                  │
+│  [Retrain Selected & Run]   [Run Again]   [Close]               │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Buttons
+
+| Button | What happens |
+|---|---|
+| **Retrain Selected & Run** | Opens the Training Grounds hub for only the ticked subsystems. When training completes the hub closes and the scenario relaunches automatically. |
+| **Run Again** | Reruns the selected scenario immediately (no retraining). |
+| **Close** | Exits the process. |
+
+### Scenario picker
+
+Click **Park**, **Forest Trail**, **Building District**, or **Urban Trail** to switch the scenario for the next run — no need to go back to the launcher.
+
+### Retrain checkboxes
+
+Checkboxes are auto-ticked for underperforming subsystems:
+- Sub-2 PPO auto-ticked when hover accuracy < 50%
+- Sub-3 SVM auto-ticked when umbrella accuracy < 75%
+- Sub-4 MDP + Nav auto-ticked when battery ends critical (< 10%)
+
+You can tick/untick any combination manually.
+
+---
+
+## Saved files
+
+| File | Updated when |
+|---|---|
+| `models/ppo_flight_v1.zip` | After every Sub-2 PPO training session |
+| `models/svm_v1.pkl` | After every Sub-3 SVM training session |
+| `models/policy_table_v1.npy` | After every Sub-4 MDP solve |
+| `models/ppo_nav_v1.zip` | After every Sub-4 Nav SAC training session |
+| `reports/run_summary_latest.json` | After every simulation run |
+| `reports/run_metrics_history.json` | Appended after every simulation run (last 20 kept) |
+| `reports/training_history.json` | Updated after every PPO / SAC training session |
 
 ---
 
 ## Troubleshooting
 
 **PyBullet window does not open**
-
 ```bash
 Xvfb :1 -screen 0 1024x768x24 &
 export DISPLAY=:1
-python run_sim.py
+python3 run_sim.py
 ```
 
-**"Models not trained" dialog on launch**
+**Hover accuracy stays near 3% in forest**  
+The look-ahead is automatically disabled for the Forest and Urban Trail scenarios because the winding path causes oscillation. If accuracy is still low, run more training from the Simulation Complete dialog.
 
-Open the Training Grounds hub and complete the training steps above. The dialog offers to launch with fallback controllers if you want to proceed without training (flight will use PID).
+**"Models not trained" dialog on launch**  
+Click **🚀 Auto-Train All** in the launcher. This trains all four subsystems in ~3 min.
 
 **`stable_baselines3` or `gymnasium` not found**
-
 ```bash
 pip install stable-baselines3 gymnasium torch --index-url https://download.pytorch.org/whl/cpu
-```
-
-**ROS 2 nodes not finding each other**
-
-```bash
-source ros2_ws/install/setup.bash
-```
-
-**`pybullet` not found**
-
-```bash
-pip install pybullet
 ```

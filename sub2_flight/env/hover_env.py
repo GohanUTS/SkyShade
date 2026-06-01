@@ -80,11 +80,10 @@ SPEED_PENALTY_SCALE = -0.5   # Penalise lateral speed.  Crucially this also keep
                              # negative from unavoidable buffeting — that's why the
                              # test scores the Q-agent on *convergence* (does it
                              # hold a hover) with reward only as a divergence guard.
-LINEAR_DAMPING = 2.5         # PyBullet damping — high enough that releasing thrust
-                             # (HOLD) brings the drone to rest within ~1 s, making
-                             # the system near first-order and learnable for a
-                             # tabular position+velocity Q-agent.  run_sim.py uses
-                             # this same value so the learned policy transfers.
+LINEAR_DAMPING = 2.5         # PyBullet damping — must match what the PPO was trained
+                             # with.  Changing this value invalidates the saved model.
+                             # run_sim.py uses this same value so the learned policy
+                             # transfers correctly.
 
 # ── Simulation constants ──────────────────────────────────────────────────────
 SIM_TIMESTEP = 1.0 / 240.0

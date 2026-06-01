@@ -82,17 +82,32 @@ DEBUG_WEATHER_LINES = False
 SCENARIO_PARK = "park"
 SCENARIO_FOREST = "forest"
 SCENARIO_BUILDINGS = "buildings"
-SCENARIO_CHOICES = (SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS)
+SCENARIO_TRAIL = "trail"
+SCENARIO_CHOICES = (SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS, SCENARIO_TRAIL)
 SCENARIO_LABELS = {
-    SCENARIO_PARK: "Park",
-    SCENARIO_FOREST: "Forest Trail",
+    SCENARIO_PARK:      "Park",
+    SCENARIO_FOREST:    "Forest Trail",
     SCENARIO_BUILDINGS: "Building District",
+    SCENARIO_TRAIL:     "Urban Trail",
 }
 SCENARIO_DESCRIPTIONS = {
-    SCENARIO_PARK: "Open park loop with light obstacles and figure-8 walking.",
-    SCENARIO_FOREST: "Long wooded trail with tree avoidance and path reset.",
+    SCENARIO_PARK:      "Open park loop with light obstacles and figure-8 walking.",
+    SCENARIO_FOREST:    "Long wooded trail with tree avoidance and path reset.",
     SCENARIO_BUILDINGS: "City plaza with buildings, roads, vehicles, and pedestrians.",
+    SCENARIO_TRAIL:     "Urban trail: bridge/underpass to fly over, crowd pedestrians as distractors.",
 }
+
+# ── Urban Trail scenario constants ────────────────────────────────────────────
+TRAIL_WALK_SPEED       = 0.50    # m/s — steady walk along the trail
+TRAIL_LENGTH           = 26.0    # metres end to end before looping
+TRAIL_START_X          = -13.0
+TRAIL_END_X            = 13.0
+TRAIL_BRIDGE_CX        = 0.0     # bridge centre x
+TRAIL_BRIDGE_HALF      = 2.8     # half-span of bridge along trail (x-axis)
+TRAIL_BRIDGE_DECK_Z    = 3.0     # underside of bridge deck (drone 2.5 m → would hit at 3 m)
+TRAIL_BRIDGE_WALL_Y    = 2.3     # y position of side walls (interior width 4.6 m)
+TRAIL_FLY_OVER_ALT     = 5.5     # altitude drone climbs to when crossing bridge zone
+TRAIL_FLY_OVER_X_HALF  = 4.5    # x half-range that triggers altitude boost
 AVOIDANCE_RADIUS = 0.45
 AVOIDANCE_GAIN = 3.0
 AVOIDANCE_MAX_FORCE = 3.0
@@ -100,7 +115,7 @@ FOLLOW_LEAD_MAX_METERS = 1.05
 GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
 USER_MARKER_HEIGHT = 1.62
-POV_DISPLAY_SIZE = (960, 540)
+POV_DISPLAY_SIZE = (1280, 720)
 TRAINING_DISPLAY_SIZE = (360, 270)
 LAUNCHER_TRAINING_DISPLAY_SIZE = (480, 360)
 # TRAINING_PIXEL_PASS imported from sub1_perception.training
@@ -118,10 +133,41 @@ def _artifact_ready(path: str, min_bytes: int = 1) -> bool:
         return os.path.exists(path) and os.path.getsize(path) >= min_bytes
     except OSError:
         return False
+
+
+# ── Persistent history helpers ────────────────────────────────────────────────
+_REPORTS_DIR          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+_RUN_HISTORY_PATH     = os.path.join(_REPORTS_DIR, "run_metrics_history.json")
+_TRAINING_HIST_PATH   = os.path.join(_REPORTS_DIR, "training_history.json")
+
+
+def _load_json_file(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return default
+
+
+def _save_json_file(path, data):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def _append_run_history(entry, max_kept=20):
+    history = _load_json_file(_RUN_HISTORY_PATH, [])
+    if not isinstance(history, list):
+        history = []
+    history.append(entry)
+    _save_json_file(_RUN_HISTORY_PATH, history[-max_kept:])
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
-FOREST_WALK_SPEED = 0.65
+FOREST_WALK_SPEED = 0.42   # slower walk — realistic pace through dense canopy
 BUILDING_RING_MIN = 7.5
 BUILDING_RING_MAX = 12.5
 ROAD_HALF_WIDTH = 1.1
@@ -145,6 +191,19 @@ def forest_walk(t):
 
 def forest_lap_index(t):
     return int((t * FOREST_WALK_SPEED) // FOREST_TRAIL_LENGTH)
+
+
+def trail_walk(t):
+    """Walk along the urban trail — straight with gentle y weave, loops at end."""
+    progress = (t * TRAIL_WALK_SPEED) % TRAIL_LENGTH
+    x = TRAIL_START_X + progress
+    # Gentle sinusoidal weave so the path isn't perfectly straight
+    y = 0.30 * math.sin(progress * 0.38) + 0.12 * math.sin(progress * 0.9)
+    return np.array([x, y, 0.0])
+
+
+def trail_lap_index(t):
+    return int((t * TRAIL_WALK_SPEED) // TRAIL_LENGTH)
 
 
 class RandomWeatherController:
@@ -391,6 +450,57 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
                 lifeTime=0.48,
                 physicsClientId=phys,
             )
+
+
+def _draw_weather_cv(frame, weather, rng, t_wall):
+    """Stamp rain and wind streaks onto an OpenCV (NumPy) frame.
+
+    All drawing is pure NumPy / cv2 — no PyBullet calls, no GPU overhead.
+    Returns the frame modified in-place.
+    """
+    rain = float(weather.get("rain", 0.0))
+    wind = float(weather.get("wind", 0.0))
+    if rain < 0.05 and wind < 1.5:
+        return frame
+
+    h, w = frame.shape[:2]
+    overlay = frame.copy()
+
+    # Wind direction rotates slowly, matching the 3D scene
+    wind_angle = t_wall * 0.15
+    lean_x = math.cos(wind_angle) * wind * 0.14
+    lean_y = math.sin(wind_angle) * wind * 0.06
+
+    # Rain drops
+    if rain >= 0.05:
+        n_drops  = int(12 + rain * 48)              # 12 – 60 drops
+        drop_len = int(h * (0.04 + rain * 0.09))    # 2 – 11 % of frame height
+        lw       = max(1, int(1 + rain * 1.5))
+        bright   = min(255, int(130 + rain * 125))
+        color    = (bright, int(bright * 0.75), int(bright * 0.45))  # blue-white in RGB
+
+        for _ in range(n_drops):
+            x0 = int(rng.integers(0, w))
+            y0 = int(rng.integers(0, h))
+            x1 = int(x0 + lean_x * drop_len)
+            y1 = int(y0 + drop_len)
+            cv2.line(overlay, (x0, y0),
+                     (max(0, min(w - 1, x1)), max(0, min(h - 1, y1))),
+                     color, lw)
+
+    # Wind streaks (horizontal motion blur wisps)
+    if wind >= 2.0:
+        n_streaks  = int(wind * 1.5)
+        streak_len = int(w * wind * 0.012)
+        for _ in range(n_streaks):
+            x0 = int(rng.integers(0, max(1, w - streak_len)))
+            y0 = int(rng.integers(0, h))
+            cv2.line(overlay, (x0, y0), (x0 + streak_len, y0), (200, 210, 225), 1)
+
+    # Blend: rain/wind marks at partial transparency over original
+    alpha = min(0.60, 0.20 + rain * 0.40)
+    cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+    return frame
 
 
 def _visual_body(phys, shape, rgba, base_position, **shape_kwargs):
@@ -904,7 +1014,7 @@ def build_forest_environment(phys):
     for x in np.linspace(FOREST_TRAIL_START_X - 0.2, FOREST_TRAIL_END_X + 0.2, 30):
         trail_y = 0.55 * math.sin((x - FOREST_TRAIL_START_X) * 0.85)
         for side in (-1.0, 1.0):
-            lateral_gap = rng.uniform(0.95, 1.75)
+            lateral_gap = rng.uniform(1.4, 2.2)   # wider gap — more sky visible above path
             jitter_x = rng.uniform(-0.18, 0.18)
             jitter_y = rng.uniform(-0.20, 0.20)
             radius = rng.uniform(0.09, 0.14)
@@ -946,17 +1056,167 @@ def build_building_environment(phys):
     return obstacles
 
 
+def build_trail_environment(phys):
+    """Urban trail with a bridge/underpass, crowd pedestrians, trees, and street furniture.
+
+    Layout (x-axis = direction of travel, -13 → +13 m):
+      • Paved trail surface
+      • Bridge underpass centred at x=0  (drone must climb to TRAIL_FLY_OVER_ALT to clear)
+      • 8 crowd pedestrians (non-red) — tracker distractors & drone obstacles
+      • Tree rows along both sides (gap where bridge is)
+      • Lamp posts, bollards, benches
+    """
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.46, 0.48, 0.44, 1], physicsClientId=phys)
+
+    obstacles = []
+    rng = np.random.default_rng(77)
+
+    # ── Trail surface (paved slabs along path) ────────────────────────────────
+    for seg_x in np.linspace(TRAIL_START_X, TRAIL_END_X, 52):
+        trail_y = 0.30 * math.sin((seg_x - TRAIL_START_X) * 0.38)
+        _static_box(phys, [0.52, 1.1, 0.012],
+                    [float(seg_x), float(trail_y), 0.016],
+                    [0.54, 0.52, 0.48, 1])
+
+    # ── Bridge / underpass ────────────────────────────────────────────────────
+    bx   = TRAIL_BRIDGE_CX
+    bh   = TRAIL_BRIDGE_HALF
+    dz   = TRAIL_BRIDGE_DECK_Z
+    wy   = TRAIL_BRIDGE_WALL_Y
+    wall_c = [0.38, 0.35, 0.31, 1]
+    deck_c = [0.32, 0.30, 0.28, 1]
+    rail_c = [0.55, 0.53, 0.50, 1]
+
+    # Left and right side walls (solid stone/concrete)
+    for side in (-1, 1):
+        _static_box(phys, [bh, 0.38, dz / 2],
+                    [bx, side * wy, dz / 2], wall_c)
+        # Decorative vertical grooves
+        for gx in (-bh * 0.6, 0.0, bh * 0.6):
+            _static_box(phys, [0.06, 0.42, dz / 2 - 0.1],
+                        [bx + gx, side * wy, dz / 2], [0.28, 0.26, 0.24, 1])
+
+    # Bridge deck (what the drone would hit at normal altitude)
+    col = p.createCollisionShape(p.GEOM_BOX,
+                                 halfExtents=[bh, wy + 0.38, 0.30],
+                                 physicsClientId=phys)
+    vis = p.createVisualShape(p.GEOM_BOX,
+                              halfExtents=[bh, wy + 0.38, 0.30],
+                              rgbaColor=deck_c, physicsClientId=phys)
+    p.createMultiBody(0, col, vis, [bx, 0.0, dz + 0.30], physicsClientId=phys)
+
+    # Bridge parapet / handrail
+    for side in (-1, 1):
+        _static_box(phys, [bh, 0.08, 0.55],
+                    [bx, side * (wy + 0.38 + 0.08), dz + 0.60 + 0.27], rail_c)
+    # Arch face plates (visual front/back edges)
+    for ex in (-bh, bh):
+        _static_box(phys, [0.22, wy, 0.24],
+                    [bx + ex, 0.0, dz + 0.24], deck_c)
+
+    # Bridge collision as lateral obstacle (sides keep drone from hitting walls)
+    for side in (-1, 1):
+        obstacles.append({
+            "position": np.array([bx, side * wy], dtype=float),
+            "radius": 0.55,
+        })
+
+    # ── Trees lining both sides ───────────────────────────────────────────────
+    for x in np.linspace(TRAIL_START_X + 0.5, TRAIL_END_X - 0.5, 24):
+        if abs(x - bx) < bh + 1.5:
+            continue   # clear zone around bridge
+        trail_y = 0.30 * math.sin((x - TRAIL_START_X) * 0.38)
+        for side in (-1, 1):
+            ty = trail_y + side * (2.0 + float(rng.uniform(0.2, 0.9)))
+            r = float(rng.uniform(0.07, 0.12))
+            obs = _tree(phys, float(x), float(ty),
+                        trunk_radius=r,
+                        trunk_height=float(rng.uniform(1.5, 2.4)),
+                        crown_radius=float(rng.uniform(0.35, 0.65)))
+            obstacles.append(obs)
+
+    # ── Lamp posts ────────────────────────────────────────────────────────────
+    for lx in np.linspace(TRAIL_START_X + 2.0, TRAIL_END_X - 2.0, 7):
+        if abs(lx - bx) < bh + 0.5:
+            continue
+        trail_y = 0.30 * math.sin((lx - TRAIL_START_X) * 0.38)
+        for side in (-1, 1):
+            px, py = float(lx), float(trail_y) + side * 1.6
+            _static_cylinder(phys, 0.045, 3.8, [px, py, 1.9], [0.20, 0.20, 0.22, 1])
+            # Lamp head (small box on top)
+            _static_box(phys, [0.12, 0.06, 0.06], [px, py, 3.85], [1.0, 0.95, 0.65, 1])
+        obstacles.append({"position": np.array([float(lx), float(trail_y)]), "radius": 0.18})
+
+    # ── Street bollards (near bridge entry) ──────────────────────────────────
+    for boll_x in [bx - bh - 0.4, bx + bh + 0.4]:
+        for boll_y in [-0.8, 0.0, 0.8]:
+            trail_y = 0.30 * math.sin((boll_x - TRAIL_START_X) * 0.38)
+            _static_cylinder(phys, 0.08, 0.9,
+                             [boll_x, trail_y + boll_y, 0.45], [0.22, 0.22, 0.72, 1])
+
+    # ── Benches along the trail ───────────────────────────────────────────────
+    for bx_b, by_b in [(-8.0, -1.5), (-4.0, 1.6), (4.5, -1.4), (9.0, 1.5)]:
+        trail_y = 0.30 * math.sin((bx_b - TRAIL_START_X) * 0.38)
+        bench = _static_box(phys, [0.55, 0.12, 0.08],
+                            [bx_b, trail_y + by_b, 0.42], [0.43, 0.24, 0.12, 1])
+        p.resetBasePositionAndOrientation(
+            bench, [bx_b, trail_y + by_b, 0.42], [0, 0, 0, 1], physicsClientId=phys)
+
+    return obstacles
+
+
+def build_trail_crowd(phys):
+    """Return list of 8 non-red pedestrians spread along the urban trail.
+
+    They act as both collision obstacles (drone avoids them) and Sub-1 tracker
+    distractors (non-red shirts — tracker stays locked to the user's red cap).
+    Returns obstacle dicts for the avoidance system.
+    """
+    crowd_obstacles = []
+    crowd_specs = [
+        # (x, y_offset_from_trail, shirt_colour)
+        (-9.5,  1.2, (0.18, 0.32, 0.72)),   # blue jacket
+        (-6.0, -1.1, (0.22, 0.55, 0.30)),   # green top
+        (-2.0,  2.0, (0.52, 0.50, 0.55)),   # grey
+        ( 1.5, -1.8, (0.62, 0.50, 0.20)),   # tan/beige
+        ( 4.0,  1.3, (0.22, 0.45, 0.58)),   # teal
+        ( 6.5, -1.0, (0.38, 0.28, 0.55)),   # purple
+        ( 8.5,  0.6, (0.25, 0.58, 0.42)),   # seafoam
+        (11.0, -1.4, (0.60, 0.40, 0.25)),   # brown
+    ]
+    pants_opts = [(0.10, 0.12, 0.18), (0.22, 0.16, 0.10), (0.08, 0.08, 0.10)]
+
+    for i, (cx, cy_off, shirt) in enumerate(crowd_specs):
+        trail_y = 0.30 * math.sin((cx - TRAIL_START_X) * 0.38)
+        world_pos = [cx, trail_y + cy_off, HUMAN_STAND_Z]
+        pants = pants_opts[i % len(pants_opts)]
+        make_city_pedestrian(phys, world_pos, shirt=shirt, pants=pants)
+        crowd_obstacles.append({
+            "position": np.array([cx, trail_y + cy_off], dtype=float),
+            "radius": 0.38,
+        })
+
+    return crowd_obstacles
+
+
 def build_environment(phys, scenario):
     if scenario == SCENARIO_FOREST:
         return build_forest_environment(phys)
     if scenario == SCENARIO_BUILDINGS:
         return build_building_environment(phys)
+    if scenario == SCENARIO_TRAIL:
+        obs = build_trail_environment(phys)
+        obs += build_trail_crowd(phys)
+        return obs
     return build_park_environment(phys)
 
 
 def scenario_user_position(scenario, t_wall):
     if scenario == SCENARIO_FOREST:
         return forest_walk(t_wall)
+    if scenario == SCENARIO_TRAIL:
+        return trail_walk(t_wall)
     return figure8(t_wall * USER_WALK_SPEED)
 
 
@@ -1071,7 +1331,7 @@ def create_person(phys):
     specs = [
         ("torso", p.GEOM_BOX, [0.12, 0.07, 0.32], None, [0.12, 0.32, 0.82, 1], [0, 0, 1.02]),
         ("head", p.GEOM_SPHERE, None, 0.13, [0.86, 0.66, 0.50, 1], [0, 0, 1.43]),
-        ("marker", p.GEOM_CYLINDER, None, 0.16, [1.0, 0.04, 0.02, 1], [0, 0, 1.62]),
+        ("marker", p.GEOM_CYLINDER, None, 0.30, [1.0, 0.04, 0.02, 1], [0, 0, 1.68]),
         ("leg_l", p.GEOM_BOX, [0.045, 0.045, 0.31], None, [0.08, 0.09, 0.11, 1], [-0.06, 0, 0.43]),
         ("leg_r", p.GEOM_BOX, [0.045, 0.045, 0.31], None, [0.08, 0.09, 0.11, 1], [0.06, 0, 0.43]),
         ("arm_l", p.GEOM_BOX, [0.035, 0.045, 0.24], None, [0.12, 0.32, 0.82, 1], [-0.18, 0, 1.02]),
@@ -1713,7 +1973,9 @@ class TrainingGroundsHub:
         self._sub2_training       = False
         self._sub2_ready          = _artifact_ready(self._PPO_PATH, 1024)
         self._sub2_start_time     = None
-        self._sub2_runs           = []
+        # Load persisted runs from disk so history survives across restarts
+        _th = _load_json_file(_TRAINING_HIST_PATH, {})
+        self._sub2_runs = [list(map(tuple, r)) for r in _th.get("sub2_runs", [])]
 
         # ── Sub-4 MDP (battery safety, value iteration) ───────────────────────
         self._sub4_queue    = queue.Queue()
@@ -1734,7 +1996,7 @@ class TrainingGroundsHub:
         self._nav_queue    = queue.Queue()
         self._nav_stop     = threading.Event()
         self._nav_thread   = None
-        self._nav_history  = []     # [(timestep, mean_reward)]
+        self._nav_history  = [tuple(p) for p in _th.get("nav_history_last", [])]
         self._nav_step     = 0
         self._nav_total    = 500_000
         self._nav_training = False
@@ -2143,19 +2405,19 @@ class TrainingGroundsHub:
 
     # ── Auto-Train sequence ───────────────────────────────────────────────────
 
-    def start_auto_train(self, retrain: bool = False, on_complete=None):
-        """Fully-automatic sequential training of all subsystems.
+    def start_auto_train(self, retrain: bool = False, stages=None, on_complete=None):
+        """Fully-automatic sequential training.
 
-        Stages:
+        Stages (pass a set to run only specific ones):
           0 — Sub-2 Flight PPO   50k steps or skip if already trained
           1 — Sub-3 Weather SVM  always < 5 sec
           2 — Sub-4 Battery MDP  always < 2 sec
           3 — Sub-4 Nav SAC      skip if trained, otherwise 12k quick steps
-        Total: usually < 1 min when models already exist
         """
         if self._auto_stage >= 0:
             return  # already running
 
+        self._auto_stages      = set(stages) if stages is not None else {0, 1, 2, 3}
         self._auto_retrain     = retrain
         self._auto_stage       = 0
         self._auto_started     = False
@@ -2164,22 +2426,27 @@ class TrainingGroundsHub:
         self._auto_on_complete = on_complete
 
         if retrain:
-            for path in [self._PPO_PATH, self._PPO_PATH.replace(".zip", "")]:
-                try:
-                    if os.path.exists(path): os.remove(path)
-                except Exception: pass
-            nav = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "models", "ppo_nav_v1")
-            for path in [nav, nav + ".zip"]:
-                try:
-                    if os.path.exists(path): os.remove(path)
-                except Exception: pass
-            self._sub2_runs.clear()
-            self._sub2_efficiency = ""
+            if 0 in self._auto_stages:
+                for path in [self._PPO_PATH, self._PPO_PATH.replace(".zip", "")]:
+                    try:
+                        if os.path.exists(path): os.remove(path)
+                    except Exception: pass
+                self._sub2_runs.clear()
+                self._sub2_efficiency = ""
+            if 3 in self._auto_stages:
+                nav = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "models", "ppo_nav_v1")
+                for path in [nav, nav + ".zip"]:
+                    try:
+                        if os.path.exists(path): os.remove(path)
+                    except Exception: pass
 
         self._auto_banner_lbl.pack(fill="x", before=self._nb)
-        self._auto_banner_var.set(
-            "🚀  Auto-Train  Step 1 / 4 — checking Sub-2 Flight PPO…")
+        selected = sorted(self._auto_stages)
+        first_label = {0: "Sub-2 Flight PPO", 1: "Sub-3 Weather SVM",
+                       2: "Sub-4 Battery MDP", 3: "Sub-4 Nav SAC"}
+        first = first_label.get(selected[0], "subsystems") if selected else "nothing"
+        self._auto_banner_var.set(f"🚀  Auto-Train  Starting with {first}…")
         self.window.lift()
         self.window.focus_force()
 
@@ -2201,6 +2468,11 @@ class TrainingGroundsHub:
 
         if stage == 0:
             if not self._auto_started:
+                # Skip if not selected
+                if 0 not in self._auto_stages:
+                    self._auto_stage = 1
+                    self._auto_started = False
+                    return
                 self.select_tab(1)
                 if self._sub2_ready and not self._auto_retrain:
                     self._sub2_efficiency = "Sub-2 PPO already trained ✓"
@@ -2220,6 +2492,10 @@ class TrainingGroundsHub:
 
         elif stage == 1:
             if not self._auto_started:
+                if 1 not in self._auto_stages:
+                    self._auto_stage = 2
+                    self._auto_started = False
+                    return
                 self.select_tab(2)
                 self._start_sub3()
                 self._auto_started = True
@@ -2232,6 +2508,10 @@ class TrainingGroundsHub:
 
         elif stage == 2:
             if not self._auto_started:
+                if 2 not in self._auto_stages:
+                    self._auto_stage = 3
+                    self._auto_started = False
+                    return
                 self.select_tab(3)
                 self._start_sub4()
                 self._auto_started = True
@@ -2244,6 +2524,10 @@ class TrainingGroundsHub:
 
         elif stage == 3:
             if not self._auto_started:
+                if 3 not in self._auto_stages:
+                    self._auto_stage = 4
+                    self._show_auto_complete()
+                    return
                 if self._nav_ready and not self._auto_retrain:
                     self._nav_efficiency = "Sub-4 Nav SAC already trained ✓"
                     self._nav_status_var.set("Already trained — skipping long SAC fine-tune.")
@@ -3408,6 +3692,10 @@ class TrainingGroundsHub:
                 if self._sub2_history:
                     self._sub2_runs.append(list(self._sub2_history))
                     self._sub2_history = []
+                    # Persist so history survives hub restarts (keep last 10 runs)
+                    _th_data = _load_json_file(_TRAINING_HIST_PATH, {})
+                    _th_data["sub2_runs"] = [list(r) for r in self._sub2_runs[-10:]]
+                    _save_json_file(_TRAINING_HIST_PATH, _th_data)
                 self._sub2_entry.configure(state="normal")
                 run_n = len(self._sub2_runs)
                 btn_lbl = f"Fine-tune  (Run {run_n + 1})" if self._sub2_ready else "Start Training"
@@ -3496,6 +3784,11 @@ class TrainingGroundsHub:
                 warm = parts[3] if len(parts) > 3 else False
                 self._nav_training = False
                 self._nav_ready    = _artifact_ready(self._NAV_PATH, 1024)
+                # Persist nav history
+                if self._nav_history:
+                    _th_data = _load_json_file(_TRAINING_HIST_PATH, {})
+                    _th_data["nav_history_last"] = list(self._nav_history[-500:])
+                    _save_json_file(_TRAINING_HIST_PATH, _th_data)
                 self._nav_entry.configure(state="normal")
                 self._nav_start_btn.configure(state="normal")
                 self._nav_retrain_btn.configure(state="normal")
@@ -4449,6 +4742,9 @@ class TelemetryWindow:
         self.test_lock = threading.Lock()
         self.vision_window = None
         self.vision_visible = True
+        self._weather_rng = np.random.default_rng()
+        # Load persistent run history for ghost-line overlays
+        self._run_history = _load_json_file(_RUN_HISTORY_PATH, [])
         self.camera_label = None
         self.camera_image = None
         self.graph_canvas = None
@@ -4800,8 +5096,8 @@ class TelemetryWindow:
         self.vision_window = tk.Toplevel(self.root)
         self.vision_window.title("SkyShade Drone POV And AI Evidence")
         self.vision_window.configure(bg="#07111f")
-        self.vision_window.geometry("1240x1040+20+40")
-        self.vision_window.minsize(1060, 900)
+        self.vision_window.geometry("1420x1300+10+10")
+        self.vision_window.minsize(1320, 1100)
         self.vision_window.protocol("WM_DELETE_WINDOW", self._hide_vision_window)
 
         tk.Label(
@@ -4850,14 +5146,14 @@ class TelemetryWindow:
             font=("Arial", 10),
             anchor="w",
             justify="left",
-            wraplength=1120,
+            wraplength=1380,
             padx=14, pady=8,
         ).grid(row=3, column=0, sticky="ew")
 
         self.graph_canvas = tk.Canvas(
             self.vision_window,
-            width=1120,
-            height=230,
+            width=1380,
+            height=520,
             bg="#0b1726",
             highlightthickness=0,
         )
@@ -4871,12 +5167,12 @@ class TelemetryWindow:
             font=("Arial", 10, "bold"),
             anchor="w",
             padx=12, pady=9,
-            wraplength=1120,
+            wraplength=1380,
             justify="left",
         ).grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 14))
 
-        self.vision_window.grid_rowconfigure(1, weight=3)
-        self.vision_window.grid_rowconfigure(4, weight=1)
+        self.vision_window.grid_rowconfigure(1, weight=2)
+        self.vision_window.grid_rowconfigure(4, weight=3)
         self.vision_window.grid_columnconfigure(0, weight=1)
 
     def _build_training_ground(self, parent, row):
@@ -5107,6 +5403,7 @@ class TelemetryWindow:
     def update_vision(
         self, frame, confidence, hover_error, avoidance_force,
         battery_pct, umbrella_cmd, gimbal_action,
+        weather=None, t_wall=0.0,
     ):
         if self.root is None or self.closed:
             return
@@ -5116,6 +5413,10 @@ class TelemetryWindow:
                 self.vision_window.deiconify()
             except tk.TclError:
                 return
+
+        # Stamp rain / wind onto the frame before any other overlay
+        if weather and (weather.get("rain", 0) >= 0.05 or weather.get("wind", 0) >= 1.5):
+            frame = _draw_weather_cv(frame.copy(), weather, self._weather_rng, t_wall)
 
         overlay = frame.copy()
         box = self._detect_marker_box(overlay)
@@ -5157,10 +5458,10 @@ class TelemetryWindow:
         if len(series) > limit:
             del series[:len(series) - limit]
 
-    def _draw_series(self, canvas, values, bounds, color, label, row):
+    def _draw_series(self, canvas, values, bounds, color, label, row,
+                     ghost=False, ghost_alpha_tag=""):
         if not values:
             return
-
         x0, y0, x1, y1 = bounds
         min_v, max_v = {
             "confidence": (0.0, 1.0),
@@ -5168,32 +5469,38 @@ class TelemetryWindow:
             "avoidance": (0.0, AVOIDANCE_MAX_FORCE),
             "battery": (0.0, 100.0),
             "umbrella": (0.0, 1.0),
-        }[label]
+        }.get(label, (0.0, 1.0))
         span = max(max_v - min_v, 1e-6)
 
+        # Thin out very long series so the canvas stays fast
+        step = max(1, len(values) // 300)
+        pts_sub = values[::step]
         points = []
-        count = len(values)
-        for i, value in enumerate(values):
+        count = len(pts_sub)
+        for i, v in enumerate(pts_sub):
             x = x0 + (x1 - x0) * (i / max(1, count - 1))
-            norm = max(0.0, min(1.0, (value - min_v) / span))
-            y = y1 - (y1 - y0) * norm
-            points.extend([x, y])
+            norm = max(0.0, min(1.0, (v - min_v) / span))
+            points.extend([x, y1 - (y1 - y0) * norm])
 
-        if len(points) >= 4:
+        if len(points) < 4:
+            return
+
+        if ghost:
+            # Past-run ghost line: dimmed colour, dashed appearance via segments
+            canvas.create_line(*points, fill=color, width=1,
+                               smooth=True, dash=(4, 6))
+        else:
             canvas.create_line(*points, fill=color, width=2, smooth=True)
-        latest = values[-1]
-        label_text = {
-            "confidence": f"confidence: {latest:.2f}",
-            "hover_error": f"hover error: {latest:.2f} m",
-            "avoidance": f"avoidance: {latest:.1f} N",
-            "battery": f"battery: {latest:.0f}%",
-            "umbrella": f"umbrella: {'deploy' if latest > 0.5 else 'stow'}",
-        }[label]
-        canvas.create_text(
-            x0 + 8, y0 + 15,
-            text=label_text, fill=color,
-            font=("Arial", 9, "bold"), anchor="w",
-        )
+            latest = values[-1]
+            label_text = {
+                "confidence": f"confidence: {latest:.2f}",
+                "hover_error": f"hover error: {latest:.2f} m",
+                "avoidance":   f"avoidance: {latest:.1f} N",
+                "battery":     f"battery: {latest:.0f}%",
+                "umbrella":    f"umbrella: {'deploy' if latest > 0.5 else 'stow'}",
+            }.get(label, "")
+            canvas.create_text(x0 + 8, y0 + 15, text=label_text,
+                                fill=color, font=("Arial", 9, "bold"), anchor="w")
 
     def _draw_live_graphs(self):
         if self.graph_canvas is None:
@@ -5201,72 +5508,124 @@ class TelemetryWindow:
 
         c = self.graph_canvas
         c.delete("all")
-        w = int(c.winfo_width() or 820)
-        h = int(c.winfo_height() or 360)
-
+        w = int(c.winfo_width() or 1120)
+        h = int(c.winfo_height() or 400)
         c.create_rectangle(0, 0, w, h, fill="#0b1726", outline="")
 
+        # ── Layout: 4 sub graphs + 1 trend row ──────────────────────────────
+        # Ghost-line palette for up to 5 past runs (most recent = brightest)
+        GHOST_COLS = {
+            "confidence": ["#064e3b", "#065f46", "#047857", "#059669", "#10b981"],
+            "hover_error":["#451a03", "#78350f", "#92400e", "#b45309", "#d97706"],
+            "avoidance":  ["#082f49", "#0c4a6e", "#075985", "#0369a1", "#0284c7"],
+            "battery":    ["#2e1065", "#3b0764", "#4a044e", "#6b21a8", "#7c3aed"],
+            "umbrella":   ["#500724", "#881337", "#9f1239", "#be123c", "#e11d48"],
+        }
+
         graph_specs = [
-            ("confidence", "#22c55e", "Marker tracking"),
-            ("hover_error", "#f59e0b", "Coverage error"),
-            ("avoidance", "#38bdf8", "Tree avoidance"),
-            ("battery", "#a78bfa", "Battery"),
-            ("umbrella", "#f472b6", "Umbrella decision"),
+            ("confidence", "#22c55e",  "Sub-1  Marker tracking confidence"),
+            ("hover_error","#f59e0b",  "Sub-2  Hover error (m)"),
+            ("avoidance",  "#38bdf8",  "Sub-2  Tree avoidance force (N)"),
+            ("battery",    "#a78bfa",  "Sub-4  Battery (%)"),
+            ("umbrella",   "#f472b6",  "Sub-3  Umbrella decision"),
         ]
-        cols = 2
-        rows = 3
-        gap = 12
-        cell_w = (w - gap * (cols + 1)) / cols
-        cell_h = (h - gap * (rows + 1)) / rows
+        cols, n_graph_rows = 3, 2
+        trend_h   = 72      # height for the trend row at the bottom
+        graph_h   = h - trend_h - 8
+        gap       = 12
+        cell_w    = (w - gap * (cols + 1)) / cols
+        cell_h    = (graph_h - gap * (n_graph_rows + 1)) / n_graph_rows
+
+        past_runs = self._run_history[-5:] if self._run_history else []
 
         for index, (key, color, title) in enumerate(graph_specs):
-            col = index % cols
-            row = index // cols
-            x0 = gap + col * (cell_w + gap)
-            y0 = gap + row * (cell_h + gap)
-            x1 = x0 + cell_w
-            y1 = y0 + cell_h
-            c.create_rectangle(x0, y0, x1, y1, fill="#0f172a", outline="#334155")
-            c.create_text(
-                x0 + 8, y0 + 14,
-                text=title, fill="#cbd5e1",
-                font=("Arial", 9, "bold"), anchor="w",
-            )
-            plot = (x0 + 10, y0 + 28, x1 - 10, y1 - 12)
-            for i in range(1, 3):
-                gy = plot[1] + (plot[3] - plot[1]) * i / 3
-                c.create_line(plot[0], gy, plot[2], gy, fill="#172554")
+            col  = index % cols
+            row  = index // cols
+            x0   = gap + col * (cell_w + gap)
+            y0   = gap + row  * (cell_h + gap)
+            x1, y1 = x0 + cell_w, y0 + cell_h
+            c.create_rectangle(x0, y0, x1, y1, fill="#0f172a", outline="#1e3a5f")
+            c.create_text(x0 + 10, y0 + 13, text=title,
+                          fill="#64748b", font=("Arial", 8, "bold"), anchor="w")
+            plot = (x0 + 10, y0 + 26, x1 - 10, y1 - 8)
+            # Grid lines
+            for gi in range(1, 3):
+                gy = plot[1] + (plot[3] - plot[1]) * gi / 3
+                c.create_line(plot[0], gy, plot[2], gy, fill="#172554", dash=(2, 6))
+
+            # Ghost lines — past runs, oldest = most faded
+            ghost_palette = GHOST_COLS.get(key, ["#334155"] * 5)
+            for ri, run in enumerate(past_runs):
+                series = run.get("series", {}).get(key, [])
+                if series:
+                    gc = ghost_palette[ri]
+                    self._draw_series(c, series, plot, gc, key, 0, ghost=True)
+
+            # Current run — bright
             self._draw_series(c, self.metric_history[key], plot, color, key, 0)
 
-        if len(graph_specs) < cols * rows:
-            index = len(graph_specs)
-            col = index % cols
-            row = index // cols
-            x0 = gap + col * (cell_w + gap)
-            y0 = gap + row * (cell_h + gap)
-            x1 = x0 + cell_w
-            y1 = y0 + cell_h
-            c.create_rectangle(x0, y0, x1, y1, fill="#0f172a", outline="#334155")
-            c.create_text(
-                x0 + 10, y0 + 16,
-                text="What these show",
-                fill="#cbd5e1", font=("Arial", 9, "bold"), anchor="w",
-            )
-            c.create_text(
-                x0 + 10, y0 + 40,
-                text="Lower coverage error means the drone is staying over the user.\nAvoidance should spike only near trunks.\nConfidence should stay high when the gimbal sees the marker.",
-                fill="#94a3b8", font=("Arial", 9), anchor="nw", width=cell_w - 20,
-            )
+        # 6th slot: info panel (5 graphs + 1 info fills 3×2 perfectly)
+        index = len(graph_specs)
+        col, row = index % cols, index // cols
+        x0  = gap + col * (cell_w + gap)
+        y0  = gap + row * (cell_h + gap)
+        x1, y1 = x0 + cell_w, y0 + cell_h
+        c.create_rectangle(x0, y0, x1, y1, fill="#0f172a", outline="#1e3a5f")
+        n = len(past_runs)
+        ghost_note = (f"Dashed lines = {n} past run{'s' if n != 1 else ''}"
+                      if n else "No past runs yet — they'll appear here.")
+        c.create_text(x0 + 12, y0 + 18, text="How to read these graphs",
+                      fill="#cbd5e1", font=("Arial", 10, "bold"), anchor="w")
+        c.create_text(x0 + 12, y0 + 42,
+                      text=(ghost_note + "\n\nBright line = this run.\n"
+                            "↓ hover error = better.\n↑ confidence = better."),
+                      fill="#64748b", font=("Arial", 9), anchor="nw",
+                      width=cell_w - 24)
 
-        conf = self.metric_history["confidence"][-1] if self.metric_history["confidence"] else 0.0
-        err = self.metric_history["hover_error"][-1] if self.metric_history["hover_error"] else 0.0
-        avoid = self.metric_history["avoidance"][-1] if self.metric_history["avoidance"] else 0.0
+        # ── Trend row: overall% per past run ────────────────────────────────
+        ty = graph_h + 4
+        c.create_rectangle(gap, ty, w - gap, ty + trend_h - 4,
+                           fill="#0d1b2a", outline="#1e3a5f")
+        c.create_text(gap + 10, ty + 10, text="Performance trend  (overall % across all runs)",
+                      fill="#38bdf8", font=("Arial", 8, "bold"), anchor="w")
+
+        all_runs = _load_json_file(_RUN_HISTORY_PATH, [])
+        if isinstance(all_runs, list) and len(all_runs) >= 2:
+            scores  = [r.get("overall_pct", 0) for r in all_runs]
+            grades  = [r.get("grade", "?")     for r in all_runs]
+            grade_c = {"A": "#4ade80", "B": "#60a5fa", "C": "#fbbf24", "D": "#f87171"}
+            tx0, tx1 = gap + 10, w - gap - 10
+            bar_y0, bar_y1 = ty + 24, ty + trend_h - 10
+            bw = (tx1 - tx0) / max(len(scores), 1)
+            for i, (sc, gr) in enumerate(zip(scores, grades)):
+                bx = tx0 + i * bw
+                bh = (bar_y1 - bar_y0) * sc / 100
+                col = grade_c.get(gr, "#64748b")
+                is_last = (i == len(scores) - 1)
+                c.create_rectangle(bx + 2, bar_y1 - bh, bx + bw - 2, bar_y1,
+                                   fill=col, outline="" if not is_last else "#ffffff")
+                if bw > 18:
+                    c.create_text(bx + bw / 2, bar_y1 - bh - 6,
+                                  text=f"{sc:.0f}%", fill=col,
+                                  font=("Arial", 7, "bold"), anchor="s")
+        elif all_runs:
+            c.create_text(w // 2, ty + trend_h // 2,
+                          text="Complete one more run to see improvement trend.",
+                          fill="#475569", font=("Arial", 8), anchor="center")
+        else:
+            c.create_text(w // 2, ty + trend_h // 2,
+                          text="No run history yet.",
+                          fill="#475569", font=("Arial", 8), anchor="center")
+
+        conf  = self.metric_history["confidence"][-1] if self.metric_history["confidence"] else 0.0
+        err   = self.metric_history["hover_error"][-1] if self.metric_history["hover_error"] else 0.0
+        avoid = self.metric_history["avoidance"][-1]   if self.metric_history["avoidance"]   else 0.0
         if self.ai_note_var is not None:
             self.ai_note_var.set(
                 "Live evidence, not live training: "
                 f"tracker confidence {conf:.2f}, hover error {err:.2f}m, "
-                f"tree avoidance force {avoid:.1f}N. "
-                "Use the validation buttons on the main dashboard for held-out subsystem checks."
+                f"avoidance {avoid:.1f}N.  "
+                f"Past-run ghost lines: {len(past_runs)} run(s) overlaid."
             )
 
     def _set_test_buttons_enabled(self, enabled):
@@ -5543,6 +5902,12 @@ def run(
                 cameraTargetPosition=[0, 0, 1.4],
                 physicsClientId=phys,
             )
+        elif scenario == SCENARIO_TRAIL:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=22.0, cameraYaw=0, cameraPitch=-22,
+                cameraTargetPosition=[0, 0, 2.0],
+                physicsClientId=phys,
+            )
         else:
             p.resetDebugVisualizerCamera(
                 cameraDistance=7, cameraYaw=30, cameraPitch=-25,
@@ -5594,17 +5959,23 @@ def run(
     tracker    = Tracker(DistanceEstimator())
     if scenario == SCENARIO_FOREST:
         flight_controller.tune_pid_for_forest()
+    if scenario == SCENARIO_TRAIL:
+        # Trail also benefits from no look-ahead (straight path with crowds)
+        flight_controller._lead_seconds = 0.25
+        flight_controller._max_lead_m   = 0.4
     umbrella   = UmbrellaClassifier()
     nav_policy = NavSafetyPolicy()
 
-    battery_pct   = float(np.clip(battery_start, 0.0, 100.0))
-    umbrella_cmd  = "STOW"
-    nav_override  = "CONTINUE"
-    confidence    = 0.0
-    user_pos      = initial_user_pos.copy()
-    prev_user_pos = user_pos.copy()
-    forest_lap    = forest_lap_index(0.0)
-    user_velocity = np.zeros(3, dtype=float)
+    battery_pct      = float(np.clip(battery_start, 0.0, 100.0))
+    umbrella_cmd     = "STOW"
+    nav_override     = "CONTINUE"
+    confidence       = 0.0
+    user_pos         = initial_user_pos.copy()
+    prev_user_pos    = user_pos.copy()
+    forest_lap       = forest_lap_index(0.0)
+    trail_lap        = trail_lap_index(0.0)
+    user_velocity    = np.zeros(3, dtype=float)
+    _bridge_active   = False    # True when drone is in the bridge fly-over zone
     gimbal_target = np.array([user_pos[0], user_pos[1], USER_MARKER_HEIGHT], dtype=float)
     dt            = STEPS_PER_ACTION * SIM_TIMESTEP
     action_dt     = 1.0 / CONTROL_HZ
@@ -5626,14 +5997,46 @@ def run(
     _stats_umb_need = []   # should umbrella be deployed? mirrors Sub-3 label threshold
     _stats_in_hover = []   # 1 if drone within 0.5m of user, else 0
 
-    print(f"SkyShade simulation running ({scenario} scenario) — Ctrl+C to stop.\n")
-    print(f"Flight controller: {flight_controller.label}")
-    print(
-        f"Battery starts at {battery_pct:.1f}% and drains at "
-        f"{battery_drain_rate:.2f}% per second.\n"
-    )
-    print(f"{'Time':>6}  {'Bat':>6}  {'Nav':<10}  {'Flight':<7}  {'Umbrella':<8}  {'Conf':>5}  {'ErrXY':>6}  {'Z':>5}")
-    print("-" * 75)
+    # Downsampled series for persistent history (1 sample per second)
+    _hist_series: dict = {"confidence": [], "hover_error": [], "battery": [], "umbrella": []}
+
+    # ── ANSI helpers ─────────────────────────────────────────────────────────
+    _R = "\033[0m"          # reset
+    _B = "\033[1m"          # bold
+    _GR = "\033[32m"        # green
+    _YL = "\033[33m"        # yellow
+    _RD = "\033[31m"        # red
+    _CY = "\033[36m"        # cyan
+    _MG = "\033[35m"        # magenta
+    _BL = "\033[34m"        # blue
+    _WH = "\033[97m"        # bright white
+
+    def _bat_col(pct):
+        return _GR if pct > 50 else _YL if pct > 30 else _RD
+
+    def _conf_col(c):
+        return _GR if c >= 0.8 else _YL if c >= 0.5 else _RD
+
+    def _err_col(e):
+        return _GR if e <= 0.5 else _YL if e <= 1.0 else _RD
+
+    def _nav_col(n):
+        return _GR if n == "CONTINUE" else _YL if n == "RTH" else _RD
+
+    # ── State tracking for event-driven prints ────────────────────────────────
+    _prev_weather_mode  = None
+    _prev_nav_override  = "CONTINUE"
+    _prev_umbrella_cmd  = None
+    _prev_conf_ok       = True     # True when confidence >= CONFIDENCE_THRESH
+    _bat_warned         = set()    # thresholds already printed {50, 30, 10}
+
+    print(f"\n{_B}{_CY}SkyShade{_R}  {_WH}{SCENARIO_LABELS.get(scenario, scenario)}{_R}"
+          f"  ·  {flight_controller.label}  ·  {duration:.0f} s\n")
+    print(f"  Battery: {_bat_col(battery_pct)}{battery_pct:.1f}%{_R}"
+          f"  drain {battery_drain_rate:.2f}%/s\n")
+    print(f"  {'Time':>7}  {'Battery':>8}  {'Nav':^10}  {'Flight':^9}"
+          f"  {'Umbrella':^8}  {'Conf':>5}  {'Err':>6}  {'Alt':>5}")
+    print("  " + "─" * 73)
 
     try:
         while True:
@@ -5648,36 +6051,42 @@ def run(
                 break
             weather_now = weather_controller.update(t_wall)
 
+            # Event: weather mode changed
+            _wmode = weather_now["mode"]
+            if _wmode != _prev_weather_mode and _prev_weather_mode is not None:
+                _rain  = weather_now["rain"]
+                _wind  = weather_now["wind"]
+                _wcol  = _BL if "rain" in _wmode.lower() else _CY
+                print(f"\n  {_wcol}[Weather]{_R} {_prev_weather_mode} → {_B}{_wmode}{_R}"
+                      f"  rain {_rain:.2f}  wind {_wind:.1f} m/s")
+            _prev_weather_mode = _wmode
+
             # ── User path ────────────────────────────────────────────────────
             user_pos = scenario_user_position(scenario, t_wall)
-            wrapped_forest_lap = False
+            wrapped_lap = False
             if scenario == SCENARIO_FOREST:
                 next_lap = forest_lap_index(t_wall)
-                wrapped_forest_lap = next_lap != forest_lap
+                wrapped_lap = next_lap != forest_lap
                 forest_lap = next_lap
-                if wrapped_forest_lap:
-                    prev_user_pos = user_pos.copy()
-                    user_velocity = np.zeros(3, dtype=float)
-                    gimbal_target = np.array(
-                        [user_pos[0], user_pos[1], USER_MARKER_HEIGHT],
-                        dtype=float,
-                    )
-                    reset_pos = [
-                        user_pos[0],
-                        user_pos[1],
-                        TARGET_ALTITUDE,
-                    ]
-                    p.resetBasePositionAndOrientation(
-                        drone_id, reset_pos, [0, 0, 0, 1],
-                        physicsClientId=phys,
-                    )
-                    p.resetBaseVelocity(
-                        drone_id, [0, 0, 0], [0, 0, 0],
-                        physicsClientId=phys,
-                    )
-                    flight_controller.reset()
+            elif scenario == SCENARIO_TRAIL:
+                next_lap = trail_lap_index(t_wall)
+                wrapped_lap = next_lap != trail_lap
+                trail_lap = next_lap
 
-            user_delta = np.zeros(3, dtype=float) if wrapped_forest_lap else user_pos - prev_user_pos
+            if wrapped_lap:
+                prev_user_pos = user_pos.copy()
+                user_velocity = np.zeros(3, dtype=float)
+                gimbal_target = np.array(
+                    [user_pos[0], user_pos[1], USER_MARKER_HEIGHT], dtype=float)
+                p.resetBasePositionAndOrientation(
+                    drone_id,
+                    [user_pos[0], user_pos[1], TARGET_ALTITUDE],
+                    [0, 0, 0, 1], physicsClientId=phys)
+                p.resetBaseVelocity(
+                    drone_id, [0, 0, 0], [0, 0, 0], physicsClientId=phys)
+                flight_controller.reset()
+
+            user_delta = np.zeros(3, dtype=float) if wrapped_lap else user_pos - prev_user_pos
             user_velocity = user_delta / max(action_dt, 1e-6)
             user_yaw = math.atan2(user_delta[1], user_delta[0]) if np.linalg.norm(user_delta[:2]) > 1e-4 else 0.0
             update_person(phys, person_parts, user_pos, user_yaw, t_wall * 4.5)
@@ -5685,6 +6094,12 @@ def run(
 
             # ── Battery ───────────────────────────────────────────────────────
             battery_pct = max(0.0, battery_pct - battery_drain_rate * loop_dt)
+            for _thresh, _msg, _col in ((50, "Watch battery", _YL),
+                                        (30, "LOW battery — RTH likely soon", _RD),
+                                        (10, "CRITICAL battery — LAND NOW", _RD + _B)):
+                if battery_pct <= _thresh and _thresh not in _bat_warned:
+                    _bat_warned.add(_thresh)
+                    print(f"\n  {_col}[Sub-4 Battery]{_R} {_msg}: {_bat_col(battery_pct)}{battery_pct:.1f}%{_R}")
 
             # ── Sub-1: Perception — camera pointing down from drone ────────────
             d_pos, _ = p.getBasePositionAndOrientation(drone_id, physicsClientId=phys)
@@ -5710,6 +6125,53 @@ def run(
             frame = np.array(px, dtype=np.uint8).reshape((H, W, 4))[:, :, :3]
             user_offset, confidence = tracker.process_frame(frame)
 
+            # ── Sub-1 Visual servo: nudge gimbal_target to centre the marker ──
+            # When the marker is detected we know exactly where it sits in the
+            # image.  Convert that pixel error to a world-space correction and
+            # apply it so the next frame captures the marker closer to centre.
+            if tracker.pixel_centroid is not None and confidence >= CONFIDENCE_THRESH:
+                _cx_px, _cy_px = tracker.pixel_centroid
+                _err_x = _cx_px - W * 0.5   # pixels right of centre
+                _err_y = _cy_px - H * 0.5   # pixels below centre
+
+                # Angular fraction of the field of view
+                _fov_h_rad = math.radians(CAMERA_FOV)
+                _fov_v_rad = _fov_h_rad * H / W
+                _frac_x = _err_x / W
+                _frac_y = _err_y / H
+
+                # World-space displacement at the current view distance
+                _eye_arr = np.array(eye, dtype=float)
+                _view_dist = float(np.linalg.norm(gimbal_target - _eye_arr))
+                _view_dist = max(0.3, _view_dist)
+                _delta_x = 2.0 * _frac_x * _view_dist * math.tan(_fov_h_rad / 2)
+                _delta_y = 2.0 * _frac_y * _view_dist * math.tan(_fov_v_rad / 2)
+
+                # Camera right and down axes in world frame
+                _gvec = gimbal_target - _eye_arr
+                _gn = float(np.linalg.norm(_gvec))
+                if _gn > 1e-3:
+                    _gvec /= _gn
+                    _up = np.array([0., 1., 0.])
+                    _cam_right = np.cross(_gvec, _up)
+                    _cr_n = float(np.linalg.norm(_cam_right))
+                    if _cr_n > 1e-3:
+                        _cam_right /= _cr_n
+                        _cam_down = np.cross(_cam_right, _gvec)
+                        _servo_correction = _delta_x * _cam_right + _delta_y * _cam_down
+                        gimbal_target = gimbal_target + _servo_correction * 0.35
+
+            # Event: tracker confidence crosses threshold
+            _conf_ok_now = confidence >= CONFIDENCE_THRESH
+            if _conf_ok_now != _prev_conf_ok:
+                if _conf_ok_now:
+                    print(f"\n  {_GR}[Sub-1 Tracker]{_R} Lock {_B}RECOVERED{_R}"
+                          f"  conf {_conf_col(confidence)}{confidence:.2f}{_R}")
+                else:
+                    print(f"\n  {_YL}[Sub-1 Tracker]{_R} Lock {_B}LOST{_R}"
+                          f"  conf {_conf_col(confidence)}{confidence:.2f}{_R} — gimbal searching")
+                _prev_conf_ok = _conf_ok_now
+
             # ── Sub-3: Env decision (1 Hz) ────────────────────────────────────
             if tick % CONTROL_HZ == 0:
                 lux = weather_now["lux"]
@@ -5722,6 +6184,12 @@ def run(
                     col = [0.1, 0.8, 0.2, 0.85] if deployed else [0.5, 0.5, 0.5, 0.4]
                     p.changeVisualShape(umb_id, -1, rgbaColor=col, physicsClientId=phys)
                     umb_deployed = deployed
+                # Event: umbrella state changed
+                if umbrella_cmd != _prev_umbrella_cmd and _prev_umbrella_cmd is not None:
+                    _ucol = _MG if deployed else _BL
+                    print(f"\n  {_ucol}[Sub-3 Umbrella]{_R} {_prev_umbrella_cmd} → {_B}{umbrella_cmd}{_R}"
+                          f"  rain {rain:.2f}  lux {lux:.0f}  wind {wind:.1f}")
+                _prev_umbrella_cmd = umbrella_cmd
 
             # ── Sub-4: Nav safety (5 Hz) ──────────────────────────────────────
             # The MDP is solved purely for safety (RTH always beats CONTINUE
@@ -5737,10 +6205,32 @@ def run(
                     nav_override = "CONTINUE"   # battery healthy — keep following
                 else:
                     nav_override = raw_override
+                # Event: nav override changed
+                if nav_override != _prev_nav_override:
+                    print(f"\n  {_nav_col(nav_override)}[Sub-4 Nav]{_R}"
+                          f" {_prev_nav_override} → {_B}{nav_override}{_R}"
+                          f"  battery {_bat_col(battery_pct)}{battery_pct:.1f}%{_R}"
+                          f"  dist-home {dist_home:.1f} m")
+                    _prev_nav_override = nav_override
 
             # ── Sub-2: flight control (PPO, legacy Q-table, or PID fallback) ──
             lin_vel, _ = p.getBaseVelocity(drone_id, physicsClientId=phys)
             drone_vel  = np.array(lin_vel)
+
+            # Bridge fly-over: raise target altitude when drone or user is inside
+            # the bridge zone so it climbs over the deck instead of colliding.
+            _alt_override = None
+            if scenario == SCENARIO_TRAIL:
+                in_bridge = (abs(drone_pos[0] - TRAIL_BRIDGE_CX) < TRAIL_FLY_OVER_X_HALF or
+                             abs(user_pos[0]  - TRAIL_BRIDGE_CX) < TRAIL_FLY_OVER_X_HALF)
+                if in_bridge != _bridge_active:
+                    _bridge_active = in_bridge
+                    tag = "ACTIVE" if in_bridge else "CLEAR"
+                    print(f"\n  {_CY}[Bridge]{_R} fly-over {_B}{tag}{_R}"
+                          f"  drone-x {drone_pos[0]:.1f}  alt → "
+                          f"{'%.1f' % TRAIL_FLY_OVER_ALT if in_bridge else '%.1f' % TARGET_ALTITUDE} m")
+                if _bridge_active:
+                    _alt_override = TRAIL_FLY_OVER_ALT
 
             flight_cmd = flight_controller.compute_force(
                 drone_pos=drone_pos,
@@ -5750,6 +6240,7 @@ def run(
                 nav_override=nav_override,
                 wind_speed=weather_now["wind"],
                 dt=dt,
+                altitude_override=_alt_override,
             )
             force = flight_cmd.force.copy()
             avoidance = obstacle_avoidance_force(
@@ -5781,7 +6272,7 @@ def run(
                 [0, 0, 0, 1], physicsClientId=phys,
             )
 
-            if DEBUG_WEATHER_LINES and gui and tick % 15 == 0:
+            if False and gui and tick % 15 == 0:  # weather visuals disabled (too slow on integrated GPU)
                 focus_xy = (
                     (np.array(d_pos2[:2], dtype=float) + user_pos[:2]) * 0.5
                 )
@@ -5812,6 +6303,8 @@ def run(
                     battery_pct,
                     umbrella_cmd,
                     gimbal_action,
+                    weather=weather_now,
+                    t_wall=t_wall,
                 )
 
             # ── Accumulate stats ──────────────────────────────────────────────
@@ -5823,12 +6316,28 @@ def run(
                 1.0 if weather_now.get("rain", 0) >= UMBRELLA_DEPLOY_RAIN_THRESHOLD else 0.0)
             _stats_in_hover.append(1.0 if _err <= 0.5 else 0.0)
 
+            # Downsample at 1 Hz for persistent history
+            if tick % CONTROL_HZ == 0:
+                _hist_series["confidence"].append(round(float(confidence), 3))
+                _hist_series["hover_error"].append(round(_err, 3))
+                _hist_series["battery"].append(round(float(battery_pct), 1))
+                _hist_series["umbrella"].append(1.0 if umbrella_cmd == "DEPLOY" else 0.0)
+
             # ── Console log every 5 s ─────────────────────────────────────────
             if tick % (CONTROL_HZ * 5) == 0:
-                err_xy = _err
-                print(f"{t_wall:6.1f}s  {battery_pct:5.1f}%  {nav_override:<10}  "
-                      f"{flight_cmd.controller:<7}  {umbrella_cmd:<8}  "
-                      f"{confidence:.2f}  {err_xy:6.2f}m  {d_pos2[2]:.2f}m")
+                _e = _err
+                _pct_done = min(100, t_wall / duration * 100)
+                _bar_len  = 12
+                _filled   = int(_bar_len * _pct_done / 100)
+                _prog_bar = f"[{'█' * _filled}{'░' * (_bar_len - _filled)}] {_pct_done:4.0f}%"
+                print(f"  {_CY}{t_wall:7.1f}s{_R}  "
+                      f"{_bat_col(battery_pct)}{battery_pct:5.1f}%{_R}  "
+                      f"{_nav_col(nav_override)}{nav_override:<10}{_R}  "
+                      f"{flight_cmd.controller:<9}  "
+                      f"{'DEPLOY' if umbrella_cmd == 'DEPLOY' else 'stow':<8}  "
+                      f"{_conf_col(confidence)}{confidence:.2f}{_R}  "
+                      f"{_err_col(_e)}{_e:5.2f}m{_R}  "
+                      f"{d_pos2[2]:.2f}m  {_prog_bar}")
 
             telemetry.tick(t_wall)
 
@@ -5916,6 +6425,394 @@ def run(
         with open(os.path.join(reports_dir, "run_summary_latest.json"), "w", encoding="utf-8") as f:
             json.dump(latest_report, f, indent=2)
 
+        # Append to persistent multi-run history (used for graph overlays)
+        _append_run_history({
+            "timestamp":            time.time(),
+            "scenario":             scenario,
+            "overall_pct":          float(overall),
+            "grade":                grade,
+            "hover_pct":            hover_pct,
+            "tracker_lock_pct":     mean_conf * 100,
+            "umbrella_correct_pct": umb_acc_pct,
+            "battery_end_pct":      float(battery_pct),
+            "series":               _hist_series,
+        })
+
+        return {
+            "hover_pct":   hover_pct,
+            "mean_err":    mean_err,
+            "mean_conf":   mean_conf * 100,
+            "umb_acc_pct": umb_acc_pct,
+            "battery_pct": float(battery_pct),
+            "overall":     float(overall),
+            "grade":       grade,
+        }
+    return None
+
+
+class ScenarioCompleteDialog:
+    """Post-run dialog with per-subsystem retrain checkboxes and scenario picker.
+
+    show() returns (action, scenario) where action is 'retrain', 'run', or None.
+    Clicking 'Retrain Selected' opens the full Training Grounds hub for only the
+    ticked subsystems, then auto-launches the chosen scenario.
+    """
+
+    def __init__(self, scenario, duration, flight, battery_start, battery_drain_rate,
+                 stats=None):
+        self._scenario = scenario
+        self._duration = duration
+        self._flight = flight
+        self._battery_start = battery_start
+        self._battery_drain_rate = battery_drain_rate
+        self._stats = stats or {}
+
+        self._result = None               # "retrain" | "run" | None
+        self._selected_scenario = scenario # may be changed by picker
+        self._retrain_vars = {}           # stage_int → tk.BooleanVar
+        self._scenario_btns = {}          # scenario_key → tk.Button
+
+        self.root = None
+
+    # ── public ────────────────────────────────────────────────────────────────
+
+    def show(self):
+        """Block until the user acts. Returns (action, scenario)."""
+        if tk is None:
+            return None, self._scenario
+        try:
+            self.root = tk.Tk()
+        except tk.TclError:
+            return None, self._scenario
+
+        self.root.title("SkyShade — Simulation Complete")
+        self.root.configure(bg="#07111f")
+        self.root.resizable(False, False)
+        self.root.minsize(520, 380)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._build_ui()
+
+        # Measure content then centre
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        rw = max(520, self.root.winfo_reqwidth())
+        rh = max(380, self.root.winfo_reqheight())
+        self.root.geometry(f"{rw}x{rh}+{(sw - rw) // 2}+{(sh - rh) // 2}")
+
+        self.root.mainloop()
+        return self._result, self._selected_scenario
+
+    # ── UI construction ───────────────────────────────────────────────────────
+
+    _W = 600   # fixed inner content width
+
+    def _build_ui(self):
+        pad = tk.Frame(self.root, bg="#07111f", padx=22, pady=16)
+        pad.pack(fill="both", expand=True)
+
+        scenario_label = SCENARIO_LABELS.get(self._scenario, self._scenario)
+        tk.Label(pad, text="Simulation Complete",
+                 fg="#38bdf8", bg="#07111f",
+                 font=("Arial", 15, "bold"), anchor="w",
+                 ).pack(fill="x")
+        tk.Label(pad,
+                 text=(f"Scenario: {scenario_label}  ·  {self._duration:.0f} s  "
+                       f"·  Flight: {self._flight.upper()}"),
+                 fg="#64748b", bg="#07111f",
+                 font=("Arial", 9), anchor="w",
+                 ).pack(fill="x", pady=(1, 10))
+
+        self._build_report(pad)
+        self._build_scenario_picker(pad)
+        self._build_buttons(pad)
+
+    def _build_report(self, parent):
+        card = tk.Frame(parent, bg="#111c2e")
+        card.pack(fill="x", pady=(0, 8))
+
+        # Fixed column widths — label expands, value and verdict are fixed
+        # col0=checkbox(28), col1=label(expands), col2=value(72), col3=verdict(150)
+        card.columnconfigure(0, weight=0, minsize=28)
+        card.columnconfigure(1, weight=1)
+        card.columnconfigure(2, weight=0, minsize=72)
+        card.columnconfigure(3, weight=0, minsize=150)
+
+        tk.Label(card,
+                 text="Post-Run Efficiency Report  —  tick to retrain",
+                 fg="#38bdf8", bg="#111c2e",
+                 font=("Arial", 10, "bold"), anchor="w",
+                 padx=12, pady=6,
+                 ).grid(row=0, column=0, columnspan=4, sticky="ew")
+        tk.Frame(card, bg="#1e3a5f", height=1).grid(
+            row=1, column=0, columnspan=4, sticky="ew")
+
+        s = self._stats
+
+        def _bg_fg(val, good, ok):
+            if val >= good: return "#052e16", "#4ade80"
+            if val >= ok:   return "#451a03", "#fbbf24"
+            return "#3b0a0a", "#f87171"
+
+        def _vtext(val, good, ok, gm, om, bm):
+            if val >= good: return f"✓ {gm}"
+            if val >= ok:   return f"~ {om}"
+            return f"✗ {bm}"
+
+        def _row(r, stage, lbl, val_s, verdict_s, rbg, rfg, pre=False, sub=False):
+            if stage is not None:
+                var = tk.BooleanVar(value=pre)
+                self._retrain_vars[stage] = var
+                tk.Checkbutton(card, variable=var, bg="#111c2e",
+                               activebackground="#111c2e",
+                               selectcolor="#1e3a5f",
+                               ).grid(row=r, column=0, padx=(8, 0))
+            else:
+                tk.Frame(card, bg="#111c2e", width=28).grid(row=r, column=0)
+
+            tk.Label(card, text=("    " if sub else "") + lbl,
+                     fg="#64748b" if sub else "#94a3b8",
+                     bg="#111c2e",
+                     font=("Arial", 9 if sub else 9, "bold"),
+                     anchor="w", padx=4, pady=4,
+                     ).grid(row=r, column=1, sticky="ew")
+            tk.Label(card, text=val_s,
+                     fg="#cbd5e1", bg="#111c2e",
+                     font=("Arial", 9, "bold"),
+                     anchor="e", padx=6, pady=4,
+                     ).grid(row=r, column=2, sticky="ew")
+            tk.Label(card, text=verdict_s,
+                     fg=rfg, bg=rbg,
+                     font=("Arial", 9, "bold"),
+                     anchor="w", padx=8, pady=4,
+                     ).grid(row=r, column=3, sticky="ew", padx=(3, 0))
+
+        if not s:
+            tk.Label(card, text="No efficiency data available.",
+                     fg="#64748b", bg="#111c2e",
+                     font=("Arial", 9), anchor="w", padx=12, pady=6,
+                     ).grid(row=2, column=0, columnspan=4, sticky="ew")
+        else:
+            hover   = s.get("hover_pct",   0.0)
+            err     = s.get("mean_err",    0.0)
+            conf    = s.get("mean_conf",   0.0)
+            umb     = s.get("umb_acc_pct", 0.0)
+            bat     = s.get("battery_pct", 0.0)
+            overall = s.get("overall",     0.0)
+            grade   = s.get("grade",       "?")
+
+            bg, fg = _bg_fg(conf, 80, 60)
+            _row(2, None, "Sub-1  Tracker lock", f"{conf:.1f}%",
+                 _vtext(conf, 80, 60, "reliable", "ok", "poor lock"), bg, fg)
+
+            bg, fg = _bg_fg(hover, 70, 40)
+            _row(3, 0, "Sub-2  Hover accuracy", f"{hover:.1f}%",
+                 _vtext(hover, 70, 40, "good", "ok", "train more"),
+                 bg, fg, pre=(hover < 50))
+
+            e_bg = "#052e16" if err<=0.5 else "#451a03" if err<=1.0 else "#3b0a0a"
+            e_fg = "#4ade80" if err<=0.5 else "#fbbf24" if err<=1.0 else "#f87171"
+            e_v  = ("✓ within 0.5 m" if err<=0.5 else
+                    "~ close" if err<=1.0 else "✗ far off target")
+            _row(4, None, "Mean hover error", f"{err:.2f} m", e_v, e_bg, e_fg, sub=True)
+
+            bg, fg = _bg_fg(umb, 85, 65)
+            _row(5, 1, "Sub-3  Umbrella correct", f"{umb:.1f}%",
+                 _vtext(umb, 85, 65, "accurate", "ok", "check SVM"),
+                 bg, fg, pre=(umb < 75))
+
+            bg, fg = _bg_fg(bat, 30, 10)
+            _row(6, 2, "Sub-4  Battery MDP + Nav SAC", f"{bat:.1f}% left",
+                 _vtext(bat, 30, 10, "safe", "low", "critical"),
+                 bg, fg, pre=(bat < 10))
+            self._retrain_vars[3] = self._retrain_vars[2]
+
+            tk.Frame(card, bg="#1e3a5f", height=1).grid(
+                row=7, column=0, columnspan=4, sticky="ew")
+
+            gfg = ("#4ade80" if grade=="A" else "#60a5fa" if grade=="B"
+                   else "#fbbf24" if grade=="C" else "#f87171")
+            tk.Label(card,
+                     text=f"Overall score:  {overall:.0f}%     Grade: {grade}",
+                     fg=gfg, bg="#0b1726",
+                     font=("Arial", 11, "bold"), anchor="w",
+                     padx=12, pady=6,
+                     ).grid(row=8, column=0, columnspan=4, sticky="ew")
+
+            hints = []
+            if hover < 50: hints.append("→ Sub-2 PPO needs more hover training")
+            if conf  < 70: hints.append("→ Sub-1 tracker confidence is low")
+            if umb   < 75: hints.append("→ Sub-3 SVM umbrella accuracy is low")
+            if hints:
+                tk.Label(card, text="  ".join(hints),
+                         fg="#f59e0b", bg="#0b1726",
+                         font=("Arial", 8), anchor="w",
+                         padx=12, pady=4, justify="left",
+                         wraplength=self._W - 30,
+                         ).grid(row=9, column=0, columnspan=4, sticky="ew")
+
+            # Performance trend chart
+            all_runs = _load_json_file(_RUN_HISTORY_PATH, [])
+            if isinstance(all_runs, list) and len(all_runs) >= 1:
+                tk.Label(card,
+                         text=f"Performance trend  ({len(all_runs)} run{'s' if len(all_runs)!=1 else ''})",
+                         fg="#38bdf8", bg="#0d1b2a",
+                         font=("Arial", 8, "bold"), anchor="w",
+                         padx=12, pady=4,
+                         ).grid(row=10, column=0, columnspan=4, sticky="ew")
+
+                tc = tk.Canvas(card, bg="#0d1b2a", height=72,
+                               highlightthickness=0)
+                tc.grid(row=11, column=0, columnspan=4,
+                        sticky="ew", padx=12, pady=(0, 6))
+
+                def _draw(event=None, _tc=tc, _runs=all_runs):
+                    try:
+                        _tc.winfo_exists()
+                    except Exception:
+                        return
+                    if not _tc.winfo_exists():
+                        return
+                    _tc.delete("all")
+                    tw = int(_tc.winfo_width()) or (self._W - 24)
+                    th = 72
+                    scores = [r.get("overall_pct", 0) for r in _runs]
+                    grades = [r.get("grade", "?")     for r in _runs]
+                    n = len(scores)
+                    gcol = {"A":"#4ade80","B":"#60a5fa","C":"#fbbf24","D":"#f87171"}
+                    raw_bw = tw / max(n, 1)
+                    bw = min(raw_bw, 48)          # cap bar width so few bars look tidy
+                    x_off = (tw - bw * n) / 2     # centre bars when capped
+                    plot_h = th - 22
+                    for i, (sc, gr) in enumerate(zip(scores, grades)):
+                        bx = x_off + i * bw
+                        bh = max(2, plot_h * sc / 100)
+                        col = gcol.get(gr, "#64748b")
+                        is_last = (i == n - 1)
+                        _tc.create_rectangle(
+                            bx + 2, th - 14 - bh, bx + bw - 2, th - 14,
+                            fill=col, outline="#e2e8f0" if is_last else "")
+                        _tc.create_text(bx + bw/2, th - 14 - bh - 3,
+                                        text=f"{sc:.0f}", fill=col,
+                                        font=("Arial", 7, "bold"), anchor="s")
+                        _tc.create_text(bx + bw/2, th - 4,
+                                        text=gr, fill="#475569",
+                                        font=("Arial", 7), anchor="s")
+                    if n >= 2:
+                        pts = []
+                        for i, sc in enumerate(scores):
+                            pts.extend([x_off + i*bw + bw/2,
+                                        (th-14) - plot_h*sc/100])
+                        _tc.create_line(*pts, fill="#94a3b8", width=1,
+                                        smooth=True, dash=(3,4))
+
+                tc.bind("<Configure>", _draw)
+                tc.after(60, _draw)
+
+    def _build_scenario_picker(self, parent):
+        outer = tk.Frame(parent, bg="#111c2e")
+        outer.pack(fill="x", pady=(0, 8))
+
+        tk.Label(outer, text="Run next scenario",
+                 fg="#64748b", bg="#111c2e",
+                 font=("Arial", 8, "bold"), anchor="w",
+                 padx=12, pady=5,
+                 ).pack(fill="x")
+
+        btn_row = tk.Frame(outer, bg="#111c2e")
+        btn_row.pack(fill="x", padx=10, pady=(0, 8))
+        n_scenarios = len(SCENARIO_LABELS)
+        for i in range(n_scenarios):
+            btn_row.columnconfigure(i, weight=1)
+
+        for col, (key, label) in enumerate(SCENARIO_LABELS.items()):
+            is_cur = (key == self._scenario)
+            btn = tk.Button(
+                btn_row,
+                text=("● " if is_cur else "") + label,
+                command=lambda k=key: self._pick_scenario(k),
+                bg="#1e3a8a" if is_cur else "#1e293b",
+                fg="#bfdbfe" if is_cur else "#64748b",
+                activebackground="#2563eb", activeforeground="#ffffff",
+                relief="flat", font=("Arial", 9, "bold"),
+                padx=6, pady=7,
+            )
+            btn.grid(row=0, column=col, sticky="ew",
+                     padx=(0, 5) if col < n_scenarios - 1 else 0)
+            self._scenario_btns[key] = btn
+
+    def _build_buttons(self, parent):
+        row = tk.Frame(parent, bg="#07111f")
+        row.pack(fill="x", pady=(4, 0))
+        for i in range(3):
+            row.columnconfigure(i, weight=1)
+
+        tk.Button(row, text="Retrain Selected & Run",
+                  command=self._on_retrain_run,
+                  bg="#2563eb", fg="#eff6ff",
+                  activebackground="#1d4ed8", activeforeground="#ffffff",
+                  relief="flat", font=("Arial", 10, "bold"),
+                  padx=8, pady=9,
+                  ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        tk.Button(row, text="Run Again",
+                  command=self._on_run_again,
+                  bg="#064e3b", fg="#d1fae5",
+                  activebackground="#065f46", activeforeground="#ffffff",
+                  relief="flat", font=("Arial", 10, "bold"),
+                  padx=8, pady=9,
+                  ).grid(row=0, column=1, sticky="ew", padx=(0, 5))
+        tk.Button(row, text="Close",
+                  command=self._on_close,
+                  bg="#1e293b", fg="#cbd5e1",
+                  activebackground="#334155", activeforeground="#ffffff",
+                  relief="flat", font=("Arial", 10, "bold"),
+                  padx=8, pady=9,
+                  ).grid(row=0, column=2, sticky="ew")
+
+    def _pick_scenario(self, key):
+        self._selected_scenario = key
+        for k, btn in self._scenario_btns.items():
+            active = (k == key)
+            btn.configure(
+                bg="#1e3a8a" if active else "#1e293b",
+                fg="#bfdbfe" if active else "#94a3b8",
+                text=("● " if active else "  ") + SCENARIO_LABELS[k],
+            )
+
+    # ── button handlers ───────────────────────────────────────────────────────
+
+    def _on_retrain_run(self):
+        stages = {s for s, var in self._retrain_vars.items() if var.get()}
+        if not stages:
+            # Nothing ticked → just run again with the selected scenario
+            self._result = "run"
+            self.root.destroy()
+            return
+        self._result = "retrain"
+        self.root.withdraw()
+        hub = TrainingGroundsHub(self.root)
+        hub.start_auto_train(retrain=True, stages=stages,
+                             on_complete=lambda: self._on_hub_done(hub))
+
+    def _on_hub_done(self, hub):
+        hub.close()
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+    def _on_run_again(self):
+        self._result = "run"
+        self.root.destroy()
+
+    def _on_close(self):
+        self._result = None
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -5978,14 +6875,34 @@ def main():
     if battery_drain_rate is None:
         battery_drain_rate = BATTERY_DRAIN_RATE
 
-    run(
-        duration=args.duration,
-        gui=not args.no_gui,
-        scenario=args.scenario or SCENARIO_PARK,
-        flight=args.flight,
-        battery_start=battery_start,
-        battery_drain_rate=battery_drain_rate,
-    )
+    gui = not args.no_gui
+    scenario = args.scenario or SCENARIO_PARK
+
+    while True:
+        stats = run(
+            duration=args.duration,
+            gui=gui,
+            scenario=scenario,
+            flight=args.flight,
+            battery_start=battery_start,
+            battery_drain_rate=battery_drain_rate,
+        )
+
+        if not gui:
+            break
+
+        dialog = ScenarioCompleteDialog(
+            scenario=scenario,
+            duration=args.duration,
+            flight=args.flight,
+            battery_start=battery_start,
+            battery_drain_rate=battery_drain_rate,
+            stats=stats,
+        )
+        action, next_scenario = dialog.show()
+        if action is None:
+            break
+        scenario = next_scenario  # honour any scenario switch from the picker
 
 
 if __name__ == "__main__":
