@@ -128,7 +128,7 @@ FOLLOW_LEAD_MAX_METERS = 1.05
 GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
 USER_MARKER_HEIGHT = 1.62
-POV_DISPLAY_SIZE = (1280, 720)
+POV_DISPLAY_SIZE = (960, 540)
 TRAINING_DISPLAY_SIZE = (360, 270)
 LAUNCHER_TRAINING_DISPLAY_SIZE = (480, 360)
 # TRAINING_PIXEL_PASS imported from sub1_perception.training
@@ -6550,7 +6550,7 @@ def run(
                 )
                 telemetry.update(values, statuses, battery_pct=battery_pct)
 
-            if gui and tick % 5 == 0:
+            if gui and tick % 10 == 0:   # 3 Hz — was 6 Hz, halved for performance
                 err_xy = float(np.linalg.norm(np.array(d_pos2[:2]) - user_pos[:2]))
                 telemetry.update_vision(
                     frame,
@@ -6573,14 +6573,14 @@ def run(
                 1.0 if weather_now.get("rain", 0) >= UMBRELLA_DEPLOY_RAIN_THRESHOLD else 0.0)
             _stats_in_hover.append(1.0 if _err <= 0.5 else 0.0)
 
-            # Downsample at 1 Hz — history file + TensorBoard
+            # Downsample at 1 Hz for history; TensorBoard at 0.33 Hz (every 3 s)
             if tick % CONTROL_HZ == 0:
                 _hist_series["confidence"].append(round(float(confidence), 3))
                 _hist_series["hover_error"].append(round(_err, 3))
                 _hist_series["battery"].append(round(float(battery_pct), 1))
                 _hist_series["umbrella"].append(1.0 if umbrella_cmd == "DEPLOY" else 0.0)
 
-                if tb_writer is not None:
+                if tb_writer is not None and tick % (CONTROL_HZ * 3) == 0:
                     _step = int(t_wall)
                     tb_writer.add_scalar("sim/tracker_confidence",     float(confidence),      _step)
                     tb_writer.add_scalar("sim/hover_error_m",          _err,                   _step)
