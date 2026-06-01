@@ -82,6 +82,8 @@ DEBUG_WEATHER_LINES = False
 # In-scene rain/cloud/mist visuals.  Drawn with addUserDebugLine, so they cost
 # GPU; redraw cadence + drop counts are tuned to stay smooth on integrated GPUs.
 # Disable with env SKYSHADE_WEATHER_VIS=0 if a machine still struggles.
+# On by default: clouds are now static (drawn once) and rain is light, so the
+# old integrated-GPU lag is gone.  Still disable with SKYSHADE_WEATHER_VIS=0.
 WEATHER_VISUALS = os.environ.get("SKYSHADE_WEATHER_VIS", "1") != "0"
 WEATHER_VIS_EVERY = 16   # redraw rain every N ticks (clouds are static, drawn once)
 SCENARIO_PARK = "park"
@@ -128,7 +130,7 @@ FOLLOW_LEAD_MAX_METERS = 1.05
 GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
 USER_MARKER_HEIGHT = 1.62
-POV_DISPLAY_SIZE = (1280, 720)
+POV_DISPLAY_SIZE = (960, 540)
 TRAINING_DISPLAY_SIZE = (360, 270)
 LAUNCHER_TRAINING_DISPLAY_SIZE = (480, 360)
 # TRAINING_PIXEL_PASS imported from sub1_perception.training
@@ -5611,8 +5613,9 @@ class TelemetryWindow:
             except tk.TclError:
                 return
 
-        # Stamp rain / wind onto the frame before any other overlay
-        if weather and (weather.get("rain", 0) >= 0.05 or weather.get("wind", 0) >= 1.5):
+        # Rain/wind camera overlay — gated by same flag as PyBullet visuals
+        if WEATHER_VISUALS and weather and (
+                weather.get("rain", 0) >= 0.05 or weather.get("wind", 0) >= 1.5):
             frame = _draw_weather_cv(frame.copy(), weather, self._weather_rng, t_wall)
 
         overlay = frame.copy()
@@ -6069,6 +6072,25 @@ def _telemetry_payload(
     )
 
 
+def _make_sim_tb_writer(scenario):
+    """Create a TensorBoard SummaryWriter for live simulation metrics.
+    Returns None gracefully if torch / tensorboard are unavailable."""
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+        _ts      = time.strftime("%Y%m%d_%H%M%S")
+        _runs    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "runs", "sim")
+        _tb_dir  = os.path.join(_runs, f"{scenario}_{_ts}")
+        os.makedirs(_tb_dir, exist_ok=True)
+        writer   = SummaryWriter(_tb_dir)
+        _logdir  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+        print(f"\n  \033[36m[TensorBoard]\033[0m  tensorboard --logdir {_logdir}"
+              f"\n  Logging sim/{scenario} → {_tb_dir}\n")
+        return writer
+    except Exception:
+        return None
+
+
 def run(
     duration=120.0,
     gui=True,
@@ -6077,6 +6099,8 @@ def run(
     battery_start=100.0,
     battery_drain_rate=BATTERY_DRAIN_RATE,
 ):
+    tb_writer = _make_sim_tb_writer(scenario)   # TensorBoard live logging
+
     mode = p.GUI if gui else p.DIRECT
     phys = p.connect(mode)
     p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=phys)
@@ -6531,7 +6555,7 @@ def run(
                 )
                 telemetry.update(values, statuses, battery_pct=battery_pct)
 
-            if gui and tick % 5 == 0:
+            if gui and tick % 10 == 0:   # 3 Hz — was 6 Hz, halved for performance
                 err_xy = float(np.linalg.norm(np.array(d_pos2[:2]) - user_pos[:2]))
                 telemetry.update_vision(
                     frame,
@@ -6554,12 +6578,36 @@ def run(
                 1.0 if weather_now.get("rain", 0) >= UMBRELLA_DEPLOY_RAIN_THRESHOLD else 0.0)
             _stats_in_hover.append(1.0 if _err <= 0.5 else 0.0)
 
-            # Downsample at 1 Hz for persistent history
+            # Downsample at 1 Hz for history; TensorBoard at 0.33 Hz (every 3 s)
             if tick % CONTROL_HZ == 0:
                 _hist_series["confidence"].append(round(float(confidence), 3))
                 _hist_series["hover_error"].append(round(_err, 3))
                 _hist_series["battery"].append(round(float(battery_pct), 1))
                 _hist_series["umbrella"].append(1.0 if umbrella_cmd == "DEPLOY" else 0.0)
+
+                if tb_writer is not None and tick % (CONTROL_HZ * 3) == 0:
+                    _step = int(t_wall)
+                    # Sub-1 Perception
+                    tb_writer.add_scalar("sub1/tracker_confidence",    float(confidence),      _step)
+                    # Sub-2 Flight Control
+                    tb_writer.add_scalar("sub2/hover_error_m",         _err,                   _step)
+                    tb_writer.add_scalar("sub2/avoidance_force_n",
+                                         float(np.linalg.norm(avoidance_for_display[:2])),     _step)
+                    if flight_cmd.reward is not None:
+                        tb_writer.add_scalar("sub2/flight_reward",
+                                             float(flight_cmd.reward),                         _step)
+                    # Sub-3 Environmental Decision
+                    tb_writer.add_scalar("sub3/umbrella_deployed",
+                                         1.0 if umbrella_cmd == "DEPLOY" else 0.0,            _step)
+                    tb_writer.add_scalar("sub3/weather_rain",
+                                         float(weather_now.get("rain", 0)),                    _step)
+                    tb_writer.add_scalar("sub3/weather_wind",
+                                         float(weather_now.get("wind", 0)),                    _step)
+                    # Sub-4 Navigation Safety
+                    tb_writer.add_scalar("sub4/battery_pct",           float(battery_pct),     _step)
+                    tb_writer.add_scalar("sub4/nav_override",
+                                         {"CONTINUE": 0, "RTH": 1,
+                                          "LAND_NOW": 2}.get(nav_override, 0),                 _step)
 
             # ── Console log every 5 s ─────────────────────────────────────────
             if tick % (CONTROL_HZ * 5) == 0:
@@ -6594,6 +6642,8 @@ def run(
         telemetry.close()
         p.disconnect(phys)
         print("Disconnected.")
+        if tb_writer is not None:
+            tb_writer.flush()
 
     # ── End-of-sim efficiency report ─────────────────────────────────────────
     if _stats_err_xy:
@@ -6690,6 +6740,20 @@ def run(
             "series":               _hist_series,
         })
 
+        # Write final efficiency stats to TensorBoard then close the writer
+        if tb_writer is not None:
+            _grade_num = {"A": 4, "B": 3, "C": 2, "D": 1}.get(grade, 0)
+            # Final scores grouped by subsystem
+            tb_writer.add_scalar("sub1/run_tracker_lock_pct",      mean_conf * 100,   0)
+            tb_writer.add_scalar("sub2/run_hover_accuracy_pct",    hover_pct,         0)
+            tb_writer.add_scalar("sub2/run_mean_hover_error_m",    mean_err,          0)
+            tb_writer.add_scalar("sub3/run_umbrella_correct_pct",  umb_acc_pct,       0)
+            tb_writer.add_scalar("sub4/run_battery_end_pct",       float(battery_pct),0)
+            tb_writer.add_scalar("system/overall_score_pct",       float(overall),    0)
+            tb_writer.add_scalar("system/grade_numeric",           _grade_num,        0)
+            tb_writer.flush()
+            tb_writer.close()
+
         return {
             "hover_pct":   hover_pct,
             "mean_err":    mean_err,
@@ -6699,6 +6763,11 @@ def run(
             "overall":     float(overall),
             "grade":       grade,
         }
+
+    # No stats — still close writer if open
+    if tb_writer is not None:
+        tb_writer.flush()
+        tb_writer.close()
     return None
 
 

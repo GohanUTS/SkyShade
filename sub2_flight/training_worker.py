@@ -29,7 +29,8 @@ import traceback
 
 import numpy as np
 
-_MODELS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "sub2_flight")
 
 # TensorBoard event logs land in <repo>/runs/ (already git-ignored).  Override
 # with SKYSHADE_TB_DIR, or disable entirely with SKYSHADE_TB=0.
@@ -97,6 +98,9 @@ class FlightTrainingWorker(threading.Thread):
                     self_.logger.record("flight/mean_reward", mean_r)
                     self_.logger.record("flight/curriculum_stage", stage)
                     q_ref.put(("progress", n, stage, mean_r))
+                    # Custom scalars — prefixed sub2 so TensorBoard groups them
+                    self_.logger.record("sub2_flight/curriculum_stage",       stage)
+                    self_.logger.record("sub2_flight/mean_episode_reward",    mean_r)
 
             np.random.seed(0)
 
@@ -122,18 +126,29 @@ class FlightTrainingWorker(threading.Thread):
                                    vec_env_cls=DummyVecEnv)
 
             # ── Warm-start: load existing model if present ────────────────────
+            os.makedirs(_RUNS_DIR, exist_ok=True)
+            from stable_baselines3.common.logger import configure as _sb3_configure
+            _tb_logger = _sb3_configure(
+                folder=_RUNS_DIR,
+                format_strings=["tensorboard", "stdout"],
+            )
+            print(f"\n  [TensorBoard] tensorboard --logdir "
+                  f"{os.path.abspath(os.path.join(_RUNS_DIR, '..', '..', 'runs'))}"
+                  f"\n  Logging PPO flight training → {_RUNS_DIR}\n")
+
             zip_path = self.OUTPUT_PATH + ".zip"
             warm     = os.path.exists(zip_path)
             if warm:
                 model = PPO.load(self.OUTPUT_PATH, env=env,
                                  learning_rate=1e-4,
                                  clip_range=0.15)
-                model.tensorboard_log = _TB_DIR   # saved models don't carry this
+                model.set_logger(_tb_logger)
                 q_ref.put(("progress", 0, 1, 0.0))
             else:
                 model = PPO(
                     "MlpPolicy", env,
-                    n_steps   = 512,       # smaller rollout per env → more frequent updates
+                    tensorboard_log=_RUNS_DIR,
+                    n_steps   = 512,
                     batch_size= 256,
                     n_epochs  = 10,
                     gamma     = 0.99,
@@ -143,8 +158,8 @@ class FlightTrainingWorker(threading.Thread):
                     ent_coef      = 0.01,
                     policy_kwargs = {"net_arch": [256, 256]},
                     seed=0, verbose=0,
-                    tensorboard_log = _TB_DIR,
                 )
+                model.set_logger(_tb_logger)
 
             cb = _Callback()
             model.learn(

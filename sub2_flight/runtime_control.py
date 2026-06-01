@@ -215,13 +215,16 @@ class RuntimeFlightController:
             obs = np.clip(obs, OBS_LOW, OBS_HIGH)
 
             ppo_force = self.ppo_policy.compute_force(obs, drone_vel)
-            # The learned policy gives the motion style, while this light
-            # stabilizer keeps the live demo centred over the user instead of
-            # slowly drifting outside the coverage zone.
             pid_force = self.pid.compute_force(drone_pos, drone_vel, target_3d, dt)
             lateral_error = float(np.linalg.norm(delta[:2]))
-            assist = float(np.clip((lateral_error - 0.10) / 0.45, 0.65, 1.0))
-            force = (1.0 - assist) * ppo_force + assist * pid_force
+
+            # Beyond 3 m the PPO policy is completely out of its training
+            # distribution — use pure PID with boosted gain to recover fast.
+            if lateral_error > 3.0:
+                force = pid_force * min(2.0, lateral_error / 3.0)
+            else:
+                assist = float(np.clip((lateral_error - 0.10) / 0.45, 0.65, 1.0))
+                force = (1.0 - assist) * ppo_force + assist * pid_force
             force = np.clip(force, -20.0, 20.0)
 
             dist3d = float(np.linalg.norm(drone_pos - target_3d))
