@@ -73,7 +73,7 @@ LOW_BATTERY_DEMO_START = 10.0
 LOW_BATTERY_DEMO_DRAIN_RATE = 1.0
 RUNTIME_PID_DAMPING = 0.5
 WIND_FORCE_SCALE    = 0.35   # N per m/s of weather wind pushed on the drone
-USER_WALK_SPEED    = 0.3    # rad/s for figure-8
+USER_WALK_SPEED    = 0.2    # rad/s for figure-8 (gentle, relaxed walking pace)
 HOVER_RADIUS       = 0.5    # m
 WEATHER_MIN_SECONDS = 8.0
 WEATHER_MAX_SECONDS = 20.0
@@ -83,7 +83,7 @@ DEBUG_WEATHER_LINES = False
 # GPU; redraw cadence + drop counts are tuned to stay smooth on integrated GPUs.
 # Disable with env SKYSHADE_WEATHER_VIS=0 if a machine still struggles.
 WEATHER_VISUALS = os.environ.get("SKYSHADE_WEATHER_VIS", "1") != "0"
-WEATHER_VIS_EVERY = 12   # redraw weather visuals every N ticks (~2.5 Hz at 30 Hz)
+WEATHER_VIS_EVERY = 16   # redraw rain every N ticks (clouds are static, drawn once)
 SCENARIO_PARK = "park"
 SCENARIO_FOREST = "forest"
 SCENARIO_BUILDINGS = "buildings"
@@ -103,7 +103,7 @@ SCENARIO_DESCRIPTIONS = {
 }
 
 # ── Urban Trail scenario constants ────────────────────────────────────────────
-TRAIL_WALK_SPEED       = 0.50    # m/s — steady walk along the trail
+TRAIL_WALK_SPEED       = 0.40    # m/s — steady walk along the trail
 TRAIL_LENGTH           = 26.0    # metres end to end before looping
 TRAIL_START_X          = -13.0
 TRAIL_END_X            = 13.0
@@ -180,7 +180,7 @@ def _append_run_history(entry, max_kept=20):
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
-FOREST_WALK_SPEED = 0.42   # slower walk — realistic pace through dense canopy
+FOREST_WALK_SPEED = 0.32   # slower walk — realistic pace through dense canopy
 # City (Building District) — enlarged so the drone has room to roam toward
 # buildings.  Buildings sit in a ring; the ring road and footpaths scale with it.
 BUILDING_RING_MIN = 11.0
@@ -194,7 +194,7 @@ HUMAN_STAND_Z = 0.62
 # right up to one building, holds, returns, then heads to the next building, so
 # the follower drone actually approaches buildings (see city_walk).
 CITY_INNER_COUNT   = 8      # buildings on the close, walk-up-able inner ring
-CITY_VISIT_SECONDS = 16.0   # seconds per out-and-back building visit
+CITY_VISIT_SECONDS = 24.0   # seconds per out-and-back building visit (relaxed pace)
 CITY_APPROACH_GAP  = 0.9    # how close (m) to a building wall the user stops
 # Fallback orbit (used only if the city layout wasn't recorded for some reason)
 CITY_WALK_R_MIN = 1.2
@@ -358,7 +358,7 @@ class RandomWeatherController:
 
 def _add_debug_ellipse(phys, center, radius_x, radius_z, color, line_width, lifetime):
     cx, cy, cz = center
-    segments = 14
+    segments = 10
     prev = None
     for i in range(segments + 1):
         angle = 2.0 * math.pi * i / segments
@@ -376,13 +376,12 @@ def _add_debug_ellipse(phys, center, radius_x, radius_z, color, line_width, life
         prev = point
 
 
-def _draw_cloud(phys, x, y, z, scale, color):
-    lifetime = 0.55
+def _draw_cloud(phys, x, y, z, scale, color, lifetime=0.0):
+    # lifetime=0.0 → permanent (drawn once, no per-frame churn, no flicker/"swirl")
     puffs = [
-        (-0.55, 0.00, 0.42, 0.18),
-        (-0.18, 0.14, 0.52, 0.24),
-        (0.25, 0.06, 0.46, 0.20),
-        (0.62, -0.02, 0.34, 0.16),
+        (-0.45, 0.04, 0.50, 0.20),
+        (0.10, 0.12, 0.56, 0.22),
+        (0.58, 0.00, 0.40, 0.18),
     ]
     for dx, dz, rx, rz in puffs:
         _add_debug_ellipse(
@@ -404,36 +403,38 @@ def _draw_cloud(phys, x, y, z, scale, color):
     )
 
 
-def _draw_cloud_bank(phys, mode):
-    """Draw clouds at the horizon — darker and more numerous in stormy weather."""
+def draw_static_clouds(phys, mode="Cloudy"):
+    """Draw the cloud bank ONCE as permanent geometry (called at sim start).
+
+    Static clouds don't churn debug lines every frame, so they neither lag the
+    sim nor flicker/"swirl" — they just sit in the sky like real clouds.
+    """
+    _draw_cloud_bank(phys, mode, lifetime=0.0)
+
+
+def _draw_cloud_bank(phys, mode, lifetime=0.0):
+    """Draw a light cloud bank around the scene (static by default).
+
+    Fewer, larger clouds spread further out so they read as a calm overcast sky
+    rather than a churning ring near the action.
+    """
     if mode == "Clear":
-        return   # no clouds in clear weather
+        color = [0.80, 0.83, 0.88]   # a few wispy clouds even when clear
     elif mode == "Cloudy":
-        color  = [0.72, 0.77, 0.84]
-        clouds = [
-            (-5.0, -5.5, 4.8, 1.20),
-            (-2.0, -5.2, 4.4, 1.10),
-            ( 0.8, -5.6, 4.6, 1.30),
-            ( 3.5, -5.3, 4.2, 1.00),
-            ( 6.0, -5.8, 4.7, 0.90),
-            (-4.5,  5.0, 4.5, 1.00),
-            ( 2.0,  5.4, 4.3, 1.15),
-        ]
+        color = [0.72, 0.77, 0.84]
     else:   # Rainy / Storm
-        color  = [0.38, 0.42, 0.52]
-        clouds = [
-            (-7.0, -6.0, 5.2, 1.60),
-            (-4.0, -5.8, 5.0, 1.40),
-            (-1.0, -6.2, 5.5, 1.70),
-            ( 2.5, -5.9, 5.1, 1.50),
-            ( 5.5, -6.3, 5.4, 1.45),
-            (-6.0,  5.5, 5.0, 1.35),
-            (-2.5,  6.0, 5.3, 1.55),
-            ( 1.5,  5.7, 5.1, 1.40),
-            ( 5.0,  6.2, 5.6, 1.65),
-        ]
+        color = [0.46, 0.50, 0.60]
+    clouds = [
+        (-12.0, -11.0, 6.2, 1.7),
+        ( -4.0, -12.0, 6.6, 1.9),
+        (  5.0, -11.5, 6.0, 1.6),
+        ( 12.0, -10.5, 6.4, 1.7),
+        ( -9.0,  11.5, 6.3, 1.8),
+        (  3.0,  12.0, 6.1, 1.6),
+        ( 11.0,  11.0, 6.5, 1.7),
+    ]
     for cloud in clouds:
-        _draw_cloud(phys, *cloud, color)
+        _draw_cloud(phys, *cloud, color, lifetime=lifetime)
 
 
 def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None):
@@ -442,12 +443,11 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
     All visuals use addUserDebugLine with a short lifeTime so they animate
     naturally — each call refreshes them for the current frame.
     """
-    mode = weather["mode"]
     rain = float(weather.get("rain", 0.0))
     wind = float(weather.get("wind", 0.0))
 
-    # ── Clouds ───────────────────────────────────────────────────────────────
-    _draw_cloud_bank(phys, mode)
+    # Clouds are drawn once as static geometry (see draw_static_clouds) — not
+    # here — so they don't churn every frame.
 
     # Slowly rotating wind direction (cycles over ~42 s)
     wind_angle = t_wall * 0.15
@@ -455,12 +455,12 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
     wd_y = math.sin(wind_angle) * 0.45
 
     # ── Rain drops ───────────────────────────────────────────────────────────
-    # Cover the full scenario (park / forest / buildings span ~15 m)
+    # Small, thin streaks kept light so the sim stays smooth on integrated GPUs.
     if rain >= 0.03:
-        drop_count = int(90 + rain * 300)   # 90–390 drops (lighter for integrated GPUs)
-        rain_r     = 16.0                   # half-width of rain area (m) — covers the bigger city
-        drop_len   = 0.90 + rain * 1.45     # 0.90–2.35 m per drop
-        lw         = 2.4 + rain * 3.4       # line width
+        drop_count = int(40 + rain * 110)   # 40–150 drops
+        rain_r     = 13.0                   # half-width of rain area (m)
+        drop_len   = 0.30 + rain * 0.40     # 0.30–0.70 m — much smaller drops
+        lw         = 0.8 + rain * 1.0       # 0.8–1.8 — thin lines
         brightness = min(1.0, 0.45 + rain * 0.90)
         colour     = [0.35 * brightness, 0.72 * brightness, 1.0 * brightness]
 
@@ -482,7 +482,7 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
         # Extra local curtain so rain stays visible near the active drone/user.
         if focus_xy is not None:
             fx, fy = float(focus_xy[0]), float(focus_xy[1])
-            local_count = int(45 + rain * 150)
+            local_count = int(15 + rain * 45)
             for _ in range(local_count):
                 x = fx + float(rng.uniform(-3.0, 3.0))
                 y = fy + float(rng.uniform(-3.0, 3.0))
@@ -491,7 +491,7 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
                     [x, y, z],
                     [x + wd_x * wind * 0.16, y + wd_y * wind * 0.16, z - drop_len],
                     [0.55 * brightness, 0.84 * brightness, 1.0],
-                    lineWidth=lw + 1.0,
+                    lineWidth=lw + 0.4,
                     lifeTime=0.65,
                     physicsClientId=phys,
                 )
@@ -499,7 +499,7 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None)
     # ── Wind streamers ───────────────────────────────────────────────────────
     # Horizontal streaks at varying heights that show wind speed + direction
     if wind >= 1.5:
-        n_streaks = int(wind * 4)           # 6–28 streaks at 1.5–7 m/s
+        n_streaks = int(wind * 2)           # 3–14 streaks at 1.5–7 m/s (light)
         streak_len = wind * 0.40            # longer = faster wind
         alpha      = min(0.85, wind / 8.0)
         col        = [0.75 * alpha, 0.82 * alpha, 0.92 * alpha]
@@ -1459,10 +1459,13 @@ def make_umbrella(phys):
         parts.append({"id": body_id, "offset": np.array(offset, dtype=float),
                       "yaw": yaw, "group": group, "rgba": list(rgba)})
 
-    # Central pole (always visible)
+    # The whole umbrella only appears when DEPLOYed (rain).  When stowed it is
+    # fully hidden so there is no stray "block"/stick left on the drone.
+
+    # Short pole the canopy sits on
     _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_POLE, [0, 0, 0],
-                      radius=0.022, length=0.52),
-         [0.0, 0.0, 0.18], "always", _UMB_POLE)
+                      radius=0.022, length=0.34),
+         [0.0, 0.0, 0.30], "open", _UMB_POLE)
 
     # Open canopy: wide disc + smaller domed cap + finial
     _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_CANOPY, [0, 0, 0],
@@ -1482,11 +1485,6 @@ def make_umbrella(phys):
              [0.30 * math.cos(ang), 0.30 * math.sin(ang), 0.435], "open",
              _UMB_RIB, yaw=ang)
 
-    # Folded wrap shown when stowed
-    _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_RIB, [0, 0, 0],
-                      radius=0.06, length=0.58),
-         [0.0, 0.0, 0.40], "closed", _UMB_RIB)
-
     return {"parts": parts}
 
 
@@ -1502,12 +1500,9 @@ def update_umbrella(phys, umb, drone_pos):
 
 
 def set_umbrella_open(phys, umb, deployed: bool):
-    """Show the open canopy when deployed, the folded wrap when stowed."""
+    """Show the open umbrella only when deployed; hide it completely otherwise."""
     for prt in umb["parts"]:
-        group = prt["group"]
-        visible = (group == "always"
-                   or (group == "open" and deployed)
-                   or (group == "closed" and not deployed))
+        visible = (prt["group"] == "always") or (prt["group"] == "open" and deployed)
         rgba = list(prt["rgba"])
         rgba[3] = rgba[3] if visible else 0.0
         p.changeVisualShape(prt["id"], -1, rgbaColor=rgba, physicsClientId=phys)
@@ -6124,6 +6119,11 @@ def run(
     obstacles = build_environment(phys, scenario)
     initial_user_pos = scenario_user_position(scenario, 0.0)
 
+    # Draw the cloud bank ONCE as static geometry — no per-frame churn (no lag,
+    # no flicker/"swirl"); they just sit in the sky like real clouds.
+    if gui and WEATHER_VISUALS:
+        draw_static_clouds(phys, "Cloudy")
+
     # Drone and user are assembled from primitive bodies so the scene has a
     # readable physical scale while the AI/control code keeps the same inputs.
     drone_id, drone_parts = create_drone(phys, initial_user_pos[:2])
@@ -6307,7 +6307,9 @@ def run(
             drone_pos = np.array(d_pos)
 
             W, H = CAMERA_RES
-            eye = (drone_pos + np.array([0.0, 0.0, -0.08])).tolist()
+            # Sit the camera just below the drone's landing skids (z ≈ -0.2) so
+            # the drone's own gear doesn't poke into the downward POV as "blocks".
+            eye = (drone_pos + np.array([0.0, 0.0, -0.26])).tolist()
             desired_marker = predictive_gimbal_target(
                 user_pos, user_velocity, confidence, t_wall,
             )
