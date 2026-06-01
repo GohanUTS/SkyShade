@@ -3,7 +3,7 @@
 ## System diagram
 
 <p align="center">
-  <img src="images/architecture.png" alt="SkyShade system architecture diagram" width="860">
+  <img src="images/architecture.png" alt="SkyShade system architecture diagram" width="1100">
 </p>
 
 <p align="center"><sub><em><b>Figure 1.</b> End-to-end data flow. The three <b>sensor inputs</b> (camera, weather, battery/pose) feed the four <b>AI subsystems</b>. Sub-1 hands a tracked target to Sub-2; Sub-4 can override Sub-2 for battery safety; Sub-3 drives the umbrella. All commands act on the <b>PyBullet world</b>, whose rendered camera view and state feed straight back to the sensors (dashed lines) — closing the loop every control tick.</em></sub></p>

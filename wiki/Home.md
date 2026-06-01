@@ -12,7 +12,7 @@ SkyShade is a drone that follows you around and holds an umbrella over your head
 <p align="center"><sub><em><b>Figure 1.</b> SkyShade in the Building District — the drone hovers over the pedestrian (red cap marker) with its umbrella open, while steering around the buildings.</em></sub></p>
 
 <p align="center">
-  <img src="images/architecture.png" alt="SkyShade system architecture" width="820">
+  <img src="images/architecture.png" alt="SkyShade system architecture" width="1100">
 </p>
 
 <p align="center"><sub><em><b>Figure 2.</b> How it fits together: three sensor inputs feed four AI subsystems, which drive the drone in a PyBullet world. Full walkthrough on the <a href="Architecture">Architecture</a> page.</em></sub></p>
