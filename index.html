@@ -182,6 +182,14 @@
 <section class="section" id="architecture">
   <div class="container is-max-desktop">
     <h2 class="title is-3 has-text-centered">System Architecture</h2>
+    <figure class="image" style="margin: 1.5rem auto; max-width: 900px;">
+      <img src="./static/images/architecture.png" alt="SkyShade system architecture diagram"
+           style="border: 3px solid #60748f; border-radius: 6px;">
+      <figcaption class="has-text-centered is-size-7" style="margin-top: 0.6rem; color:#555;">
+        <strong>Figure 1.</strong> End-to-end data flow: three sensor inputs feed the four AI subsystems,
+        which act on the PyBullet world; the rendered view and state feed back to close the loop each tick.
+      </figcaption>
+    </figure>
     <div class="content has-text-justified">
       <p>
         SkyShade is structured as a ROS2 system with four independent nodes.
@@ -347,6 +355,35 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
 <section class="section" id="validation">
   <div class="container is-max-desktop">
     <h2 class="title is-3 has-text-centered">Validation and Results</h2>
+
+    <div class="columns is-centered" style="margin-bottom: 0.5rem;">
+      <div class="column">
+        <img src="./static/images/flight_ppo_reward.png" alt="PPO flight training reward"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+      </div>
+      <div class="column">
+        <img src="./static/images/nav_sac_reward.png" alt="SAC navigation reward on the city layout"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+      </div>
+    </div>
+    <div class="columns is-centered" style="margin-bottom: 0.5rem;">
+      <div class="column is-half">
+        <img src="./static/images/sub3_confusion_matrix.png" alt="SVM confusion matrix"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+      </div>
+      <div class="column is-half">
+        <img src="./static/images/convergence_curve.png" alt="MDP convergence curve"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+      </div>
+    </div>
+    <p class="has-text-centered is-size-7" style="margin-bottom: 1.5rem; color:#555;">
+      <strong>Figure 2.</strong> Real training results &mdash; Sub-2 PPO hover reward climbing to +408
+      and Sub-4 SAC navigation reward rising on the City layout (top); the Sub-3 SVM confusion matrix
+      (96&nbsp;% CV accuracy, zero false-deploys) and the Sub-4 battery-safety MDP convergence (bottom).
+      All four validation tests pass: Sub-1 100&nbsp;%/0.081&nbsp;m, Sub-2 10/10 hovers,
+      Sub-3 96&nbsp;%/0&nbsp;% flips, Sub-4 50/50 safety scenarios.
+    </p>
+
     <div class="content has-text-justified">
       <p>
         The integrated ROS2 system was validated by launching the four nodes and
