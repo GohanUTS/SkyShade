@@ -2,14 +2,14 @@
 
 ## What is SkyShade?
 
-SkyShade is a fully simulated autonomous quadcopter that:
+Picture a personal umbrella that flies itself. SkyShade is a simulated quadcopter that:
 
-1. **Tracks** a moving user using a downward-facing virtual camera
-2. **Hovers** above the user at a fixed altitude while compensating for wind
-3. **Decides** whether to deploy or stow an umbrella canopy based on live weather sensor readings
-4. **Overrides** normal flight and returns home or lands immediately when battery is critically low
+1. **Tracks** you with a downward-facing camera (no GPS — just vision)
+2. **Hovers** overhead at a fixed height, holding station through wind gusts
+3. **Decides** when to open or close its umbrella from live light, rain and wind readings
+4. **Plays it safe** — when the battery runs low it stops following and heads home (or lands on the spot)
 
-The simulation runs entirely in **PyBullet** for physics, with **ROS 2** nodes handling communication between the four AI subsystems.
+Everything runs in **PyBullet** for the physics, with **ROS 2** nodes wiring the four AI subsystems together.
 
 ---
 
@@ -44,7 +44,8 @@ Traditional umbrellas require constant manual attention. SkyShade removes that b
 | Physics simulation | PyBullet |
 | Robot middleware | ROS 2 Humble |
 | Language | Python 3.10 |
-| Flight control | PID (Q-learning archived) |
+| Flight control | PPO policy + PID fallback (Q-learning archived) |
+| Obstacle navigation | Soft Actor-Critic (SAC) |
 | Weather classification | SVM with RBF kernel |
 | Safety policy | MDP + Bellman value iteration |
 | Computer vision | OpenCV HSV segmentation |
