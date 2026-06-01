@@ -2,6 +2,12 @@
 
 This branch contains the GitHub Pages website for the SkyShade AI Robotics project.
 
+Live website:
+
+```text
+https://gohanuts.github.io/SkyShade/
+```
+
 The website presents a clear summary of the project, including:
 
 - Project overview
@@ -66,6 +72,8 @@ git commit -m "Update SkyShade website"
 git push origin github_page
 ```
 
+The live website should update shortly after pushing.
+
 ## Updating Wiki Content
 
 The latest wiki content is maintained on the main branch. To copy the latest wiki into this website branch:
@@ -78,11 +86,13 @@ git commit -m "Update website wiki content"
 git push origin github_page
 ```
 
+Only update `index.html` if the homepage summary, layout, images, or links need to change. If only the detailed wiki text changes, updating the `wiki/` folder is enough.
+
 ## GitHub Pages Setup
 
-This branch is intended to be used as the GitHub Pages source branch.
+This branch is used as the GitHub Pages source branch.
 
-The repository owner should configure GitHub Pages using:
+GitHub Pages should be configured as:
 
 ```text
 Settings → Pages → Deploy from a branch → github_page → /root
