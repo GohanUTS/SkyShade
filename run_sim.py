@@ -3,7 +3,7 @@ SkyShade — full integrated simulation runner.
 
 Starts a PyBullet GUI window and runs all four subsystems together:
   Sub-1  Perception       HSV tracker + distance estimator (camera feed)
-  Sub-2  Flight Control   Q-learning hover policy with PID fallback
+  Sub-2  Flight Control   PPO hover policy with Q/PID fallbacks
   Sub-3  Env Decision     SVM umbrella classifier
   Sub-4  Nav Safety       MDP policy table
 
@@ -12,11 +12,12 @@ randomly switch between cloudy periods, light rain, and full rain.
 Battery drains and triggers the Sub-4 safety override.
 
 Usage:
-    python run_sim.py [--duration 120] [--no-gui] [--flight pid|q]
+    python run_sim.py [--duration 120] [--no-gui] [--flight ppo|q|pid]
                       [--demo-low-battery]
 """
 
 import argparse
+import json
 import math
 import queue
 import subprocess
@@ -24,6 +25,9 @@ import sys
 import threading
 import time
 import os
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/skyshade_mpl")
+
 import cv2
 import numpy as np
 
@@ -73,6 +77,7 @@ USER_WALK_SPEED    = 0.3    # rad/s for figure-8
 HOVER_RADIUS       = 0.5    # m
 WEATHER_MIN_SECONDS = 8.0
 WEATHER_MAX_SECONDS = 20.0
+UMBRELLA_DEPLOY_RAIN_THRESHOLD = 0.20  # matches Sub-3 training labels
 DEBUG_WEATHER_LINES = False
 SCENARIO_PARK = "park"
 SCENARIO_FOREST = "forest"
@@ -88,9 +93,9 @@ SCENARIO_DESCRIPTIONS = {
     SCENARIO_FOREST: "Long wooded trail with tree avoidance and path reset.",
     SCENARIO_BUILDINGS: "City plaza with buildings, roads, vehicles, and pedestrians.",
 }
-AVOIDANCE_RADIUS = 0.75
-AVOIDANCE_GAIN = 4.5
-AVOIDANCE_MAX_FORCE = 5.5
+AVOIDANCE_RADIUS = 0.45
+AVOIDANCE_GAIN = 3.0
+AVOIDANCE_MAX_FORCE = 3.0
 FOLLOW_LEAD_MAX_METERS = 1.05
 GIMBAL_LOOKAHEAD_SECONDS = 0.95
 GIMBAL_SEARCH_RADIUS = 0.55
@@ -105,6 +110,14 @@ TRAINING_GROUND_ITEMS = (
     ("weather",  "Sub-3 Weather",    "SVM",          "3D weather scene — umbrella deploy/stow SVM decision.", "#f472b6"),
     ("safety",   "Sub-4 Nav Safety", "MDP + SAC",    "3D obstacle room — lidar navigation (SAC) + battery safety.", "#f59e0b"),
 )
+
+
+def _artifact_ready(path: str, min_bytes: int = 1) -> bool:
+    """True only when a model artefact exists and is not an empty/stale file."""
+    try:
+        return os.path.exists(path) and os.path.getsize(path) >= min_bytes
+    except OSError:
+        return False
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
@@ -280,7 +293,7 @@ def _draw_cloud_bank(phys, mode):
         _draw_cloud(phys, *cloud, color)
 
 
-def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0):
+def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0, focus_xy=None):
     """Draw rain, wind streamers, mist and clouds in the PyBullet scene.
 
     All visuals use addUserDebugLine with a short lifeTime so they animate
@@ -300,18 +313,18 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0):
 
     # ── Rain drops ───────────────────────────────────────────────────────────
     # Cover the full scenario (park / forest / buildings span ~15 m)
-    if rain >= 0.10:
-        drop_count = int(80 + rain * 280)   # 80–360 drops
+    if rain >= 0.03:
+        drop_count = int(150 + rain * 520)  # 165–670 drops
         rain_r     = 14.0                   # half-width of rain area (m)
-        drop_len   = 0.55 + rain * 1.05     # 0.55–1.60 m per drop
-        lw         = 1.8 + rain * 2.8       # line width
-        brightness = min(1.0, 0.25 + rain * 0.80)
-        colour     = [0.12 * brightness, 0.48 * brightness, 1.0 * brightness]
+        drop_len   = 0.90 + rain * 1.45     # 0.90–2.35 m per drop
+        lw         = 2.4 + rain * 3.4       # line width
+        brightness = min(1.0, 0.45 + rain * 0.90)
+        colour     = [0.35 * brightness, 0.72 * brightness, 1.0 * brightness]
 
         for _ in range(drop_count):
             x  = float(rng.uniform(-rain_r, rain_r))
             y  = float(rng.uniform(-rain_r, rain_r))
-            z  = float(rng.uniform(3.0, 7.5))
+            z  = float(rng.uniform(2.3, 8.5))
             dx = wd_x * wind * 0.14
             dy = wd_y * wind * 0.14
             p.addUserDebugLine(
@@ -319,9 +332,26 @@ def draw_weather_visuals(phys, weather, rng, t_wall: float = 0.0):
                 [x + dx, y + dy, z - drop_len],
                 colour,
                 lineWidth=lw,
-                lifeTime=0.40,
+                lifeTime=0.65,
                 physicsClientId=phys,
             )
+
+        # Extra local curtain so rain stays visible near the active drone/user.
+        if focus_xy is not None:
+            fx, fy = float(focus_xy[0]), float(focus_xy[1])
+            local_count = int(80 + rain * 260)
+            for _ in range(local_count):
+                x = fx + float(rng.uniform(-3.0, 3.0))
+                y = fy + float(rng.uniform(-3.0, 3.0))
+                z = float(rng.uniform(2.0, 5.8))
+                p.addUserDebugLine(
+                    [x, y, z],
+                    [x + wd_x * wind * 0.16, y + wd_y * wind * 0.16, z - drop_len],
+                    [0.55 * brightness, 0.84 * brightness, 1.0],
+                    lineWidth=lw + 1.0,
+                    lifeTime=0.65,
+                    physicsClientId=phys,
+                )
 
     # ── Wind streamers ───────────────────────────────────────────────────────
     # Horizontal streaks at varying heights that show wind speed + direction
@@ -1654,7 +1684,7 @@ class TrainingGroundsHub:
         self._sub3_stop     = threading.Event()
         self._sub3_thread   = None
         self._sub3_training = False
-        self._sub3_ready    = os.path.exists(self._SVM_PATH)
+        self._sub3_ready    = _artifact_ready(self._SVM_PATH, 256)
         self._sub3_accuracy = None
         self._sub3_cm       = None
         # If model already exists, compute CM from training data so it shows immediately
@@ -1664,8 +1694,9 @@ class TrainingGroundsHub:
             except Exception:
                 pass
         self._sub3_status_var = None
+        self._sub3_summary_var = None
         self._sub3_fig = self._sub3_canvas = None
-        self._sub3_ax_3d = self._sub3_ax_chart = None
+        self._sub3_ax_3d = self._sub3_ax_chart = self._sub3_ax_matrix = None
         self._sub3_train_btn = None
         # Shared classifier for live demo (loaded lazily)
         self._sub3_clf      = None
@@ -1680,7 +1711,7 @@ class TrainingGroundsHub:
         self._sub2_run_start_step = None   # cumulative step count at run start (for % calc)
         self._sub2_total          = 1_500_000
         self._sub2_training       = False
-        self._sub2_ready          = os.path.exists(self._PPO_PATH)
+        self._sub2_ready          = _artifact_ready(self._PPO_PATH, 1024)
         self._sub2_start_time     = None
         self._sub2_runs           = []
 
@@ -1692,7 +1723,7 @@ class TrainingGroundsHub:
         self._sub4_policy   = None
         self._sub4_iters    = 0
         self._sub4_training = False
-        self._sub4_ready    = os.path.exists(self._MDP_PATH)
+        self._sub4_ready    = _artifact_ready(self._MDP_PATH)
         if self._sub4_ready:
             try:
                 self._sub4_policy = np.load(self._MDP_PATH)
@@ -1707,7 +1738,7 @@ class TrainingGroundsHub:
         self._nav_step     = 0
         self._nav_total    = 500_000
         self._nav_training = False
-        self._nav_ready    = os.path.exists(self._NAV_PATH)
+        self._nav_ready    = _artifact_ready(self._NAV_PATH, 1024)
         self._nav_viz      = None   # latest viz state dict from worker
 
         # ── Matplotlib figures & axes (populated in _build_ui) ──────────────
@@ -1726,9 +1757,11 @@ class TrainingGroundsHub:
         self._auto_stage      = -1
         self._auto_retrain    = False
         self._auto_started    = False   # True once current stage has been kicked off
+        self._auto_stage_started_at = None
+        self._auto_failed_msg = ""
         self._auto_on_complete = None   # callback when all done
         self._auto_banner_var  = None   # StringVar for top banner
-        self._auto_total_steps = [100_000, 0, 0, 80_000]  # steps per stage
+        self._auto_total_steps = [50_000, 0, 0, 12_000]  # quick auto-train steps
 
         # ── Evaluation state ──────────────────────────────────────────────────
         self._sub2_eval_queue  = queue.Queue()
@@ -1931,16 +1964,21 @@ class TrainingGroundsHub:
         # Left: 3D animated weather scene (drone + umbrella + rain + wind).
         # Right: Weather gauges + SVM decision + confusion matrix.
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-        fig = Figure(figsize=(9, 4.4), dpi=90, facecolor=_MPL_FIG_BG)
-        gs  = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.06,
-                               left=0.02, right=0.98, top=0.93, bottom=0.07)
-        ax_3d    = fig.add_subplot(gs[0], projection="3d")
-        ax_chart = fig.add_subplot(gs[1])
+        fig = Figure(figsize=(10.5, 5.2), dpi=100, facecolor=_MPL_FIG_BG)
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1.25, 1.0],
+                               height_ratios=[0.44, 0.56],
+                               wspace=0.08, hspace=0.18,
+                               left=0.02, right=0.98, top=0.93, bottom=0.08)
+        ax_3d     = fig.add_subplot(gs[:, 0], projection="3d")
+        ax_chart  = fig.add_subplot(gs[0, 1])
+        ax_matrix = fig.add_subplot(gs[1, 1])
         self._style_3d_ax(ax_3d, "Weather Scene")
-        _mpl_dark_axes(ax_chart, "SVM Decision", "", "")
-        self._sub3_fig     = fig
-        self._sub3_ax_3d   = ax_3d
+        _mpl_dark_axes(ax_chart, "Live SVM Decision", "", "")
+        _mpl_dark_axes(ax_matrix, "Validation Results", "", "")
+        self._sub3_fig      = fig
+        self._sub3_ax_3d    = ax_3d
         self._sub3_ax_chart = ax_chart
+        self._sub3_ax_matrix = ax_matrix
 
         canvas = FigureCanvasTkAgg(fig, master=frame)
         canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=(10, 2))
@@ -1956,6 +1994,14 @@ class TrainingGroundsHub:
         tk.Label(ctrl, textvariable=self._sub3_status_var,
                  fg="#94a3b8", bg="#07111f", font=("Arial", 10, "bold"), anchor="w"
                  ).grid(row=0, column=0, sticky="w")
+
+        self._sub3_summary_var = tk.StringVar(
+            value=("Output: STOW keeps the umbrella closed; DEPLOY opens it. "
+                   "Green matrix cells are correct decisions, red cells are mistakes."))
+        tk.Label(ctrl, textvariable=self._sub3_summary_var,
+                 fg="#cbd5e1", bg="#07111f", font=("Arial", 9), anchor="w",
+                 justify="left", wraplength=820
+                 ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self._sub3_train_btn = tk.Button(
             ctrl, text="🔄  Train / Retrain SVM",
@@ -1996,7 +2042,7 @@ class TrainingGroundsHub:
 
         tk.Label(nav_ctrl, text="Steps:", fg="#64748b", bg="#07111f", font=("Arial", 9)
                  ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self._nav_steps_var = tk.StringVar(value="150000")
+        self._nav_steps_var = tk.StringVar(value="12000")
         self._nav_entry = tk.Entry(nav_ctrl, textvariable=self._nav_steps_var,
                                    bg="#020617", fg="#f8fafc", insertbackground="#f8fafc",
                                    relief="flat", font=("Arial", 11, "bold"), width=9)
@@ -2079,7 +2125,7 @@ class TrainingGroundsHub:
         return ""
 
     def _all_ready(self) -> bool:
-        return self._sub2_ready and self._sub4_ready
+        return self._sub2_ready and self._sub3_ready and self._sub4_ready and self._nav_ready
 
     def _gate_text(self) -> str:
         s1 = "●"
@@ -2101,11 +2147,11 @@ class TrainingGroundsHub:
         """Fully-automatic sequential training of all subsystems.
 
         Stages:
-          0 — Sub-2 Flight PPO   100k steps  ~60 sec (4 parallel envs)
+          0 — Sub-2 Flight PPO   50k steps or skip if already trained
           1 — Sub-3 Weather SVM  always < 5 sec
           2 — Sub-4 Battery MDP  always < 2 sec
-          3 — Sub-4 Nav SAC      80k steps   ~50 sec
-        Total: ~2–3 min
+          3 — Sub-4 Nav SAC      skip if trained, otherwise 12k quick steps
+        Total: usually < 1 min when models already exist
         """
         if self._auto_stage >= 0:
             return  # already running
@@ -2113,6 +2159,8 @@ class TrainingGroundsHub:
         self._auto_retrain     = retrain
         self._auto_stage       = 0
         self._auto_started     = False
+        self._auto_stage_started_at = None
+        self._auto_failed_msg  = ""
         self._auto_on_complete = on_complete
 
         if retrain:
@@ -2131,7 +2179,7 @@ class TrainingGroundsHub:
 
         self._auto_banner_lbl.pack(fill="x", before=self._nb)
         self._auto_banner_var.set(
-            "🚀  Auto-Train  Step 1 / 4 — Sub-2 Flight PPO (~60 sec)…")
+            "🚀  Auto-Train  Step 1 / 4 — checking Sub-2 Flight PPO…")
         self.window.lift()
         self.window.focus_force()
 
@@ -2140,48 +2188,90 @@ class TrainingGroundsHub:
         stage = self._auto_stage
         if stage < 0 or stage >= 4:
             return
+        if self._auto_failed_msg:
+            self._show_auto_complete()
+            return
 
         LABELS = [
-            "Step 1 / 4 — Sub-2 Flight PPO  (~60 sec)",
+            "Step 1 / 4 — Sub-2 Flight PPO  (quick)",
             "Step 2 / 4 — Sub-3 Weather SVM  (~5 sec)",
             "Step 3 / 4 — Sub-4 Battery MDP  (~2 sec)",
-            "Step 4 / 4 — Sub-4 Nav SAC      (~50 sec)",
+            "Step 4 / 4 — Sub-4 Nav SAC      (skip if trained)",
         ]
 
         if stage == 0:
             if not self._auto_started:
                 self.select_tab(1)
-                self._sub2_steps_var.set("100000")
+                if self._sub2_ready and not self._auto_retrain:
+                    self._sub2_efficiency = "Sub-2 PPO already trained ✓"
+                    self._sub2_status_var.set("Already trained — skipping PPO fine-tune.")
+                    self._auto_stage = 1
+                    self._auto_started = False
+                    return
+                self._sub2_steps_var.set(str(self._auto_total_steps[0]))
                 self._start_sub2()
                 self._auto_started = True
+                self._auto_stage_started_at = time.time()
                 self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[0]}")
             elif not self._sub2_training:
-                self._auto_stage = 1; self._auto_started = False
+                self._auto_stage = 1
+                self._auto_started = False
+                self._auto_stage_started_at = None
 
         elif stage == 1:
             if not self._auto_started:
                 self.select_tab(2)
                 self._start_sub3()
                 self._auto_started = True
+                self._auto_stage_started_at = time.time()
                 self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[1]}")
             elif not self._sub3_training:
-                self._auto_stage = 2; self._auto_started = False
+                self._auto_stage = 2
+                self._auto_started = False
+                self._auto_stage_started_at = None
 
         elif stage == 2:
             if not self._auto_started:
                 self.select_tab(3)
                 self._start_sub4()
                 self._auto_started = True
+                self._auto_stage_started_at = time.time()
                 self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[2]}")
             elif not self._sub4_training:
-                self._auto_stage = 3; self._auto_started = False
+                self._auto_stage = 3
+                self._auto_started = False
+                self._auto_stage_started_at = None
 
         elif stage == 3:
             if not self._auto_started:
-                self._nav_steps_var.set("80000")
+                if self._nav_ready and not self._auto_retrain:
+                    self._nav_efficiency = "Sub-4 Nav SAC already trained ✓"
+                    self._nav_status_var.set("Already trained — skipping long SAC fine-tune.")
+                    self._auto_stage = 4
+                    self._show_auto_complete()
+                    return
+                self._nav_steps_var.set(str(self._auto_total_steps[3]))
                 self._start_nav()
                 self._auto_started = True
+                self._auto_stage_started_at = time.time()
                 self._auto_banner_var.set(f"🚀  Auto-Train  {LABELS[3]}")
+            elif self._nav_training:
+                elapsed = time.time() - (self._auto_stage_started_at or time.time())
+                if elapsed > 90:
+                    self._nav_stop.set()
+                    self._nav_training = False
+                    self._nav_ready = _artifact_ready(self._NAV_PATH, 1024)
+                    self._nav_entry.configure(state="normal")
+                    self._nav_start_btn.configure(state="normal")
+                    self._nav_retrain_btn.configure(state="normal")
+                    self._nav_stop_btn.configure(state="disabled", bg="#334155",
+                                                  fg="#94a3b8", activebackground="#475569")
+                    self._nav_efficiency = (
+                        "⏱ Nav SAC fine-tune timed out after 90 sec — using existing "
+                        "or partial model.")
+                    self._nav_status_var.set(self._nav_efficiency)
+                    self._auto_stage = 4
+                    self._show_auto_complete()
             elif not self._nav_training:
                 self._auto_stage = 4
                 self._show_auto_complete()
@@ -2189,6 +2279,13 @@ class TrainingGroundsHub:
     def _show_auto_complete(self):
         """Replace banner with a green completion summary."""
         self._auto_stage = -1
+
+        if self._auto_failed_msg:
+            self._auto_banner_var.set(
+                f"⚠ Auto-Train stopped before completion: {self._auto_failed_msg}  "
+                "Fix that subsystem, then run Auto-Train again.")
+            self._auto_banner_lbl.configure(fg="#fed7aa", bg="#7c2d12")
+            return
 
         s2 = self._sub2_efficiency or "Sub-2 PPO ✓"
         s3 = (f"Sub-3 SVM {self._sub3_accuracy:.0%} ✓"
@@ -2432,7 +2529,7 @@ class TrainingGroundsHub:
 
     def _load_sub3_clf(self):
         """Lazy-load the SVM classifier for the live demo."""
-        if self._sub3_clf is None and os.path.exists(self._SVM_PATH):
+        if self._sub3_clf is None and _artifact_ready(self._SVM_PATH, 256):
             try:
                 import pickle
                 from sub3_env.feature_engineering import FeatureBuilder
@@ -2486,6 +2583,18 @@ class TrainingGroundsHub:
                 pass
 
         umbrella_open = self._sub3_umbrella == "DEPLOY"
+        if self._sub3_status_var is not None and not self._sub3_training:
+            acc = (f" | CV accuracy {self._sub3_accuracy:.1%}"
+                   if self._sub3_accuracy is not None else "")
+            self._sub3_status_var.set(
+                f"Live SVM output: {self._sub3_umbrella} | "
+                f"lux {lux/1000:.0f}k, rain {rain:.2f}, wind {wind:.1f} m/s{acc}")
+        if self._sub3_summary_var is not None:
+            self._sub3_summary_var.set(
+                f"The SVM reads lux, rain, and wind. DEPLOY opens the umbrella "
+                f"when rain is about {UMBRELLA_DEPLOY_RAIN_THRESHOLD:.2f}+; "
+                "STOW keeps it closed. Green cells below are correct validation "
+                "decisions; red cells are mistakes.")
 
         # ── 3D Weather Scene ─────────────────────────────────────────────────
         ax = self._sub3_ax_3d
@@ -2582,7 +2691,7 @@ class TrainingGroundsHub:
         self._sub3_azim = (self._sub3_azim + 0.3) % 360
         ax.view_init(elev=18, azim=self._sub3_azim)
 
-        # ── Right panel: weather gauges + decision + confusion matrix ────────
+        # ── Upper-right panel: weather gauges + live SVM decision ────────────
         ax_c = self._sub3_ax_chart
         ax_c.cla()
         ax_c.set_facecolor(_MPL_BG)
@@ -2594,8 +2703,8 @@ class TrainingGroundsHub:
         phase_idx   = int(phase * 4) % 4
         phase_label = phases[phase_idx]
 
-        ax_c.set_title(f"SVM Decision  ·  {phase_label}",
-                       color=_MPL_TITLE, fontsize=14, pad=6, fontweight="bold")
+        ax_c.set_title(f"Live SVM Decision  ·  {phase_label}",
+                       color=_MPL_TITLE, fontsize=13, pad=6, fontweight="bold")
 
         # ── Weather gauges (bigger bars, bigger labels) ───────────────────────
         bar_data = [
@@ -2604,72 +2713,80 @@ class TrainingGroundsHub:
             ("Wind", min(1.0, wind/10),    "#67e8f9", f"{wind:.1f} m/s"),
         ]
         for i, (lbl, val, col, display) in enumerate(bar_data):
-            y = 0.84 - i * 0.13
-            ax_c.barh(y, val, height=0.10, color=col, alpha=0.85,
+            y = 0.82 - i * 0.17
+            ax_c.barh(y, val, height=0.13, color=col, alpha=0.85,
                       transform=ax_c.transAxes, left=0.16)
             ax_c.text(0.01, y, lbl, transform=ax_c.transAxes,
-                      color=col, fontsize=14, fontweight="bold", va="center")
+                      color=col, fontsize=12, fontweight="bold", va="center")
             ax_c.text(0.99, y, display, transform=ax_c.transAxes,
-                      color=col, fontsize=13, va="center", ha="right")
+                      color=col, fontsize=11, va="center", ha="right")
 
         # ── SVM decision banner (very large) ─────────────────────────────────
         bg_col  = "#14532d" if umbrella_open else "#1e293b"
         ax_c.add_patch(__import__("matplotlib.patches", fromlist=["FancyBboxPatch"])
-                       .FancyBboxPatch((0.05, 0.44), 0.90, 0.13,
+                       .FancyBboxPatch((0.05, 0.08), 0.90, 0.20,
                                        boxstyle="round,pad=0.02",
                                        transform=ax_c.transAxes,
                                        facecolor=bg_col, edgecolor=dec_col, linewidth=2))
-        ax_c.text(0.5, 0.505, dec_txt, transform=ax_c.transAxes,
+        ax_c.text(0.5, 0.19, dec_txt, transform=ax_c.transAxes,
                   ha="center", va="center",
-                  color=dec_col, fontsize=26, fontweight="bold")
+                  color=dec_col, fontsize=24, fontweight="bold")
 
         # ── Explanation line ──────────────────────────────────────────────────
-        explain = ("Umbrella open — heavy rain detected"
-                   if umbrella_open else "Umbrella closed — conditions clear")
-        ax_c.text(0.5, 0.41, explain, transform=ax_c.transAxes,
-                  ha="center", color="#94a3b8", fontsize=11, style="italic")
+        explain = ("Model output: DEPLOY because rain crossed the learned boundary"
+                   if umbrella_open
+                   else "Model output: STOW because conditions are below the deploy boundary")
+        ax_c.text(0.5, 0.015, explain, transform=ax_c.transAxes,
+                  ha="center", color="#94a3b8", fontsize=9, style="italic")
 
-        # ── Confusion matrix (larger cells, bigger text) ──────────────────────
+        # ── Lower-right panel: validation confusion matrix ───────────────────
+        ax_m = self._sub3_ax_matrix
+        ax_m.cla()
+        ax_m.set_facecolor(_MPL_BG)
+        for sp in ax_m.spines.values():
+            sp.set_color(_MPL_EDGE)
+        ax_m.set_xticks([]); ax_m.set_yticks([])
+
         if self._sub3_cm is not None:
             cm = self._sub3_cm
             from matplotlib.patches import FancyBboxPatch
-            cm_labels = [["Correct stow",   "Wrong — deployed in clear"],
-                         ["Wrong — missed rain", "Correct deploy"]]
-            cm_counts = [[cm[0,0], cm[0,1]], [cm[1,0], cm[1,1]]]
-            cm_cols   = [["#16a34a", "#dc2626"], ["#dc2626", "#16a34a"]]
-            for ri in range(2):
-                for ci in range(2):
-                    bx = 0.04 + ci * 0.48
-                    by = 0.00 + ri * 0.185
-                    ax_c.add_patch(FancyBboxPatch(
-                        (bx, by), 0.44, 0.16,
-                        boxstyle="round,pad=0.01",
-                        transform=ax_c.transAxes,
-                        facecolor=cm_cols[ri][ci], alpha=0.8,
-                        edgecolor="#334155", linewidth=1.5))
-                    # Count (big)
-                    ax_c.text(bx + 0.22, by + 0.11,
-                              str(cm_counts[ri][ci]),
-                              transform=ax_c.transAxes, ha="center", va="center",
-                              color="white", fontsize=20, fontweight="bold")
-                    # Label (small below count)
-                    ax_c.text(bx + 0.22, by + 0.035,
-                              cm_labels[ri][ci],
-                              transform=ax_c.transAxes, ha="center", va="center",
-                              color="white", fontsize=9)
+            ax_m.set_title("Validation Confusion Matrix",
+                           color=_MPL_TITLE, fontsize=13, pad=8, fontweight="bold")
+            ax_m.text(0.36, 0.88, "Predicted STOW", transform=ax_m.transAxes,
+                      ha="center", color="#93c5fd", fontsize=10, fontweight="bold")
+            ax_m.text(0.76, 0.88, "Predicted DEPLOY", transform=ax_m.transAxes,
+                      ha="center", color="#93c5fd", fontsize=10, fontweight="bold")
 
-            # Row/col headers
-            ax_c.text(0.27, 0.40, "Actual: Stow",    transform=ax_c.transAxes,
-                      ha="center", color="#94a3b8", fontsize=10)
-            ax_c.text(0.75, 0.40, "Actual: Deploy",  transform=ax_c.transAxes,
-                      ha="center", color="#94a3b8", fontsize=10)
+            cells = [
+                (0, 0, 0.18, 0.55, "Actual STOW", "Correct stow", "#16a34a"),
+                (0, 1, 0.58, 0.55, "Actual STOW", "False deploy", "#dc2626"),
+                (1, 0, 0.18, 0.25, "Actual DEPLOY", "Missed rain", "#dc2626"),
+                (1, 1, 0.58, 0.25, "Actual DEPLOY", "Correct deploy", "#16a34a"),
+            ]
+            for ri, ci, bx, by, row_lbl, label, color in cells:
+                if ci == 0:
+                    ax_m.text(0.02, by + 0.10, row_lbl, transform=ax_m.transAxes,
+                              ha="left", va="center", color="#cbd5e1",
+                              fontsize=9, fontweight="bold")
+                ax_m.add_patch(FancyBboxPatch(
+                    (bx, by), 0.34, 0.20,
+                    boxstyle="round,pad=0.01",
+                    transform=ax_m.transAxes,
+                    facecolor=color, alpha=0.82,
+                    edgecolor="#334155", linewidth=1.5))
+                ax_m.text(bx + 0.17, by + 0.125, str(cm[ri, ci]),
+                          transform=ax_m.transAxes, ha="center", va="center",
+                          color="white", fontsize=20, fontweight="bold")
+                ax_m.text(bx + 0.17, by + 0.050, label,
+                          transform=ax_m.transAxes, ha="center", va="center",
+                          color="white", fontsize=9)
 
             # CV accuracy prominently
             acc_col = "#4ade80" if (self._sub3_accuracy or 0) >= 0.9 else "#f97316"
             acc_txt = (f"Accuracy: {self._sub3_accuracy:.1%}  ✓ passes 90% target"
                        if (self._sub3_accuracy or 0) >= 0.9
                        else f"Accuracy: {self._sub3_accuracy:.1%}  ✗ below 90% target")
-            ax_c.text(0.5, -0.03, acc_txt, transform=ax_c.transAxes,
+            ax_m.text(0.5, 0.05, acc_txt, transform=ax_m.transAxes,
                       ha="center", color=acc_col, fontsize=12, fontweight="bold")
         else:
             if self._sub3_ready:
@@ -2679,9 +2796,9 @@ class TrainingGroundsHub:
                 except Exception:
                     pass
             if self._sub3_cm is None:
-                ax_c.text(0.5, 0.20,
+                ax_m.text(0.5, 0.50,
                           "Click  '🔄 Train / Retrain SVM'\nto train the model\nand see accuracy results here.",
-                          transform=ax_c.transAxes, ha="center", va="center",
+                          transform=ax_m.transAxes, ha="center", va="center",
                           color="#64748b", fontsize=13)
 
         self._sub3_canvas.draw_idle()
@@ -2726,7 +2843,7 @@ class TrainingGroundsHub:
         self._sub2_start_btn.configure(state="disabled"); self._sub2_retrain_btn.configure(state="disabled")
         self._sub2_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                       activebackground="#b91c1c")
-        warm = os.path.exists(self._PPO_PATH)
+        warm = _artifact_ready(self._PPO_PATH, 1024)
         run_n = len(self._sub2_runs) + 1
         warm_note = f"Run {run_n} — fine-tuning…" if warm else "Run 1 — training from scratch…"
         mins = max(1, total // 120_000)   # ~2000 steps/sec with 4 parallel envs
@@ -3181,7 +3298,7 @@ class TrainingGroundsHub:
         if self._nav_eval_active or self._nav_training:
             return
         from sub4_nav.eval_worker import NavEvalWorker
-        if not os.path.exists(self._NAV_PATH):
+        if not _artifact_ready(self._NAV_PATH, 1024):
             self._nav_status_var.set("No trained model found — train navigation first.")
             return
         self._nav_eval_stop.clear()
@@ -3220,7 +3337,7 @@ class TrainingGroundsHub:
         try:
             total = max(2048, int(self._nav_steps_var.get()))
         except ValueError:
-            total = 500_000
+            total = 12_000
         self._nav_total = total
         self._nav_history.clear()
         self._nav_viz  = None
@@ -3234,9 +3351,10 @@ class TrainingGroundsHub:
         self._nav_start_btn.configure(state="disabled"); self._nav_retrain_btn.configure(state="disabled")
         self._nav_stop_btn.configure(state="normal", bg="#dc2626", fg="#ffffff",
                                      activebackground="#b91c1c")
-        warm_note = "SAC fine-tuning from existing model…" if os.path.exists(self._NAV_PATH) else "SAC training from scratch…"
+        warm_note = "SAC fine-tuning from existing model…" if _artifact_ready(self._NAV_PATH, 1024) else "SAC training from scratch…"
+        eta = "~15-30 sec" if total <= 15_000 else f"~{max(1, total // 50000)} min"
         self._nav_status_var.set(
-            f"{warm_note}  ~{max(1, total // 50000)} min on CPU  "
+            f"{warm_note}  {eta} on CPU  "
             "· SAC off-policy (replay buffer) · auto-entropy exploration")
 
     def _stop_nav(self):
@@ -3285,7 +3403,7 @@ class TrainingGroundsHub:
                 eff  = parts[2] if len(parts) > 2 else 0
                 warm = parts[3] if len(parts) > 3 else False
                 self._sub2_training = False
-                self._sub2_ready = os.path.exists(self._PPO_PATH)
+                self._sub2_ready = _artifact_ready(self._PPO_PATH, 1024)
                 # Archive completed run for multi-line history
                 if self._sub2_history:
                     self._sub2_runs.append(list(self._sub2_history))
@@ -3307,6 +3425,8 @@ class TrainingGroundsHub:
                 changed2 = True
             elif k == "error":
                 self._sub2_training = False
+                if self._auto_stage == 0:
+                    self._auto_failed_msg = f"Sub-2 Flight PPO error: {msg[1][:100]}"
                 self._sub2_entry.configure(state="normal")
                 self._sub2_start_btn.configure(state="normal")
                 self._sub2_retrain_btn.configure(state="normal")
@@ -3331,7 +3451,7 @@ class TrainingGroundsHub:
                 _, policy, _vals = msg
                 self._sub4_policy  = policy
                 self._sub4_training = False
-                self._sub4_ready   = os.path.exists(self._MDP_PATH)
+                self._sub4_ready   = _artifact_ready(self._MDP_PATH)
                 self._sub4_solve_btn.configure(state="normal")
                 self._sub4_stop_btn.configure(state="disabled", bg="#334155",
                                                fg="#94a3b8", activebackground="#475569")
@@ -3341,6 +3461,8 @@ class TrainingGroundsHub:
                 changed4 = True
             elif k == "error":
                 self._sub4_training = False
+                if self._auto_stage == 2:
+                    self._auto_failed_msg = f"Sub-4 Battery MDP error: {msg[1][:100]}"
                 self._sub4_solve_btn.configure(state="normal")
                 self._sub4_stop_btn.configure(state="disabled", bg="#334155",
                                                fg="#94a3b8", activebackground="#475569")
@@ -3373,7 +3495,7 @@ class TrainingGroundsHub:
                 eff  = parts[2] if len(parts) > 2 else 0
                 warm = parts[3] if len(parts) > 3 else False
                 self._nav_training = False
-                self._nav_ready    = os.path.exists(self._NAV_PATH)
+                self._nav_ready    = _artifact_ready(self._NAV_PATH, 1024)
                 self._nav_entry.configure(state="normal")
                 self._nav_start_btn.configure(state="normal")
                 self._nav_retrain_btn.configure(state="normal")
@@ -3385,10 +3507,18 @@ class TrainingGroundsHub:
                 self._nav_efficiency = (
                     f"✓ SAC model trained — {eff_str}  ({warm_str})" if k == "done"
                     else f"⏹ Stopped at {steps:,} steps — {eff_str}")
+                if not self._nav_ready:
+                    self._nav_efficiency = (
+                        "⚠ Nav SAC did not produce a valid model file. "
+                        "Run Train Navigation again.")
+                    if self._auto_stage == 3:
+                        self._auto_failed_msg = "Sub-4 Nav SAC did not save a valid model."
                 self._nav_status_var.set(self._nav_efficiency)
                 changed_nav = True
             elif k == "error":
                 self._nav_training = False
+                if self._auto_stage == 3:
+                    self._auto_failed_msg = f"Sub-4 Nav SAC error: {msg[1][:100]}"
                 self._nav_entry.configure(state="normal")
                 self._nav_start_btn.configure(state="normal")
                 self._nav_retrain_btn.configure(state="normal")
@@ -3409,7 +3539,7 @@ class TrainingGroundsHub:
             elif k == "done":
                 _, path, acc, cm = msg
                 self._sub3_training  = False
-                self._sub3_ready     = os.path.exists(self._SVM_PATH)
+                self._sub3_ready     = _artifact_ready(self._SVM_PATH, 256)
                 self._sub3_accuracy  = acc
                 self._sub3_cm        = cm
                 self._sub3_clf       = None   # reload on next tick
@@ -3419,6 +3549,8 @@ class TrainingGroundsHub:
                     f"({'≥90% target met' if acc >= 0.9 else 'below 90% target'})")
             elif k == "error":
                 self._sub3_training = False
+                if self._auto_stage == 1:
+                    self._auto_failed_msg = f"Sub-3 Weather SVM error: {msg[1][:100]}"
                 self._sub3_train_btn.configure(state="normal", text="Train SVM")
                 self._sub3_status_var.set(f"Error: {msg[1][:100]}")
 
@@ -3532,6 +3664,7 @@ class ScenarioLauncher:
         self.training_window = None
         self.flight_training_window = None
         self.training_hub = None
+        self.training_model_status_vars = {}
 
         self.root = tk.Tk()
         self.root.title("SkyShade Launcher")
@@ -3542,7 +3675,7 @@ class ScenarioLauncher:
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
 
         self.scenario_var = tk.StringVar(value=SCENARIO_PARK)
-        self.flight_var = tk.StringVar(value="q")
+        self.flight_var = tk.StringVar(value="ppo")
         self.duration_var = tk.StringVar(value=str(int(default_duration)))
         self.gui_var = tk.BooleanVar(value=True)
         self.error_var = tk.StringVar(value="")
@@ -3689,7 +3822,7 @@ class ScenarioLauncher:
         flight_card.grid_columnconfigure(0, weight=1)
         tk.Label(
             flight_card,
-            text="Q-learning active",
+            text="PPO flight model active",
             fg="#f8fafc",
             bg="#0f172a",
             font=("Arial", 12, "bold"),
@@ -3697,7 +3830,7 @@ class ScenarioLauncher:
         ).grid(row=0, column=0, sticky="ew")
         tk.Label(
             flight_card,
-            text="Sub-2 learned policy from qtable_v1.npy with velocity-aware state buckets.",
+            text="Uses ppo_flight_v1.zip. If PPO is unavailable, runtime falls back to the legacy Q-table, then PID.",
             fg="#bfdbfe",
             bg="#0f172a",
             font=("Arial", 10),
@@ -3834,7 +3967,7 @@ class ScenarioLauncher:
 
         tk.Button(
             auto_frame,
-            text="🚀  Auto-Train All  (~3 min)",
+            text="🚀  Auto-Train All  (quick)",
             command=lambda: self._launch_auto_train(retrain=False),
             bg="#166534", fg="#dcfce7",
             activebackground="#14532d", activeforeground="#ffffff",
@@ -3894,6 +4027,19 @@ class ScenarioLauncher:
             wraplength=360 if not compact else 255,
         ).grid(row=2, column=0, sticky="ew", pady=(3, 0))
 
+        status_var = tk.StringVar(value=self._model_status_for_key(key))
+        self.training_model_status_vars[key] = status_var
+        tk.Label(
+            card,
+            textvariable=status_var,
+            fg="#94a3b8",
+            bg="#111827",
+            font=("Arial", 9),
+            anchor="w",
+            justify="left",
+            wraplength=360 if not compact else 255,
+        ).grid(row=3, column=0, sticky="ew", pady=(5, 0))
+
         _BTN = {
             "camera":      ("Calibrate",  "#166534", "#dcfce7"),
             "flight":      ("Train PPO",  "#1e3a8a", "#bfdbfe"),
@@ -3914,7 +4060,84 @@ class ScenarioLauncher:
             font=("Arial", 9, "bold"),
             padx=10,
             pady=6,
-        ).grid(row=0, column=1, rowspan=3, sticky="e", padx=(8, 0))
+        ).grid(row=0, column=1, rowspan=4, sticky="e", padx=(8, 0))
+
+    def _model_status_for_key(self, key):
+        repo_root = os.path.dirname(os.path.abspath(__file__))
+        specs = {
+            "camera": None,
+            "flight": ("models/ppo_flight_v1.zip", "runtime active"),
+            "weather": ("models/svm_v1.pkl", "runtime active"),
+        }
+        if key == "camera":
+            return "No saved model: deterministic CV calibration."
+        if key == "environment":
+            return "Stress scene available: Building District."
+        if key == "safety":
+            mdp_path = os.path.join(repo_root, "models/policy_table_v1.npy")
+            nav_path = os.path.join(repo_root, "models/ppo_nav_v1.zip")
+            mdp_ok = _artifact_ready(mdp_path)
+            nav_ok = _artifact_ready(nav_path, 1024)
+            if mdp_ok and nav_ok:
+                nav_meta = self._read_model_meta(nav_path)
+                if nav_meta and "efficiency_pct" in nav_meta:
+                    return f"Trained: MDP + SAC nav (eff {int(nav_meta['efficiency_pct'])}%)."
+                return "Trained: MDP battery table + SAC navigation model."
+            missing = []
+            if not mdp_ok:
+                missing.append("policy_table_v1.npy")
+            if not nav_ok:
+                missing.append("ppo_nav_v1.zip")
+            return "Missing " + ", ".join(missing) + "."
+
+        spec = specs.get(key)
+        if not spec:
+            return ""
+        rel_path, role = spec
+        path = os.path.join(repo_root, rel_path)
+        min_bytes = 1024 if path.endswith(".zip") else 256
+        if not _artifact_ready(path, min_bytes):
+            return f"Missing {os.path.basename(path)}."
+
+        meta = self._read_model_meta(path)
+        if meta:
+            if "efficiency_pct" in meta:
+                metric = f"eff {int(meta['efficiency_pct'])}%"
+            elif "cv_accuracy" in meta:
+                metric = f"CV {float(meta['cv_accuracy']) * 100:.1f}%"
+            else:
+                metric = "trained"
+            return f"Trained: {meta.get('algorithm', os.path.basename(path))} ({metric}, {role})."
+
+        age_seconds = max(0.0, time.time() - os.path.getmtime(path))
+        if age_seconds < 3600:
+            age = f"{int(age_seconds // 60)} min ago"
+        elif age_seconds < 86400:
+            age = f"{int(age_seconds // 3600)} hr ago"
+        else:
+            age = f"{int(age_seconds // 86400)} days ago"
+        return f"Trained: {os.path.basename(path)} ({age}, {role})."
+
+    @staticmethod
+    def _read_model_meta(model_path):
+        meta_candidates = [model_path + ".meta.json"]
+        if model_path.endswith(".zip"):
+            meta_candidates.append(model_path[:-4] + ".meta.json")
+        meta_path = next((path for path in meta_candidates if os.path.exists(path)), None)
+        if meta_path is None:
+            return None
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _refresh_model_statuses(self):
+        for key, var in list(self.training_model_status_vars.items()):
+            try:
+                var.set(self._model_status_for_key(key))
+            except tk.TclError:
+                pass
 
     def _launch_auto_train(self, retrain: bool = False):
         """Open the hub and immediately start the auto-train sequence."""
@@ -3927,9 +4150,13 @@ class ScenarioLauncher:
 
     def _on_auto_train_complete(self):
         """Called by the hub when all auto-training is done."""
-        if self.training_status_var:
-            self.training_status_var.set(
-                "✓ All systems trained! Select a scenario and click Launch.")
+        try:
+            if self.training_status_var:
+                self.training_status_var.set(
+                    "✓ All systems trained! Select a scenario and click Launch.")
+            self._refresh_model_statuses()
+        except tk.TclError:
+            pass
 
     def _open_training_hub(self, tab_idx: int = 0):
         """Open (or focus) the unified TrainingGroundsHub and select a tab."""
@@ -4112,12 +4339,16 @@ class ScenarioLauncher:
                                 "models", "policy_table_v1.npy")
         svm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "models", "svm_v1.pkl")
-        if not os.path.exists(ppo_path):
+        nav_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "models", "ppo_nav_v1.zip")
+        if not _artifact_ready(ppo_path, 1024):
             missing.append("Sub-2 Flight PPO (ppo_flight_v1.zip)")
-        if not os.path.exists(svm_path):
+        if not _artifact_ready(svm_path, 256):
             missing.append("Sub-3 Weather SVM (svm_v1.pkl)")
-        if not os.path.exists(mdp_path):
+        if not _artifact_ready(mdp_path):
             missing.append("Sub-4 Nav Safety (policy_table_v1.npy)")
+        if not _artifact_ready(nav_path, 1024):
+            missing.append("Sub-4 Navigation SAC (ppo_nav_v1.zip)")
         return missing
 
     def _launch(self):
@@ -4163,7 +4394,7 @@ def choose_launch_settings(default_duration=120.0):
     if tk is None:
         return {
             "scenario": SCENARIO_PARK,
-            "flight": "q",
+            "flight": "ppo",
             "duration": default_duration,
             "gui": True,
         }
@@ -4174,7 +4405,7 @@ def choose_launch_settings(default_duration=120.0):
         print(f"Launcher unavailable: {exc}")
         return {
             "scenario": SCENARIO_PARK,
-            "flight": "q",
+            "flight": "ppo",
             "duration": default_duration,
             "gui": True,
         }
@@ -4189,7 +4420,7 @@ def launch_sim_process(settings):
         "--duration",
         str(settings["duration"]),
         "--flight",
-        settings.get("flight", "pid"),
+        settings.get("flight", "ppo"),
     ]
     if not settings["gui"]:
         cmd.append("--no-gui")
@@ -4632,8 +4863,6 @@ class TelemetryWindow:
         )
         self.graph_canvas.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 10))
 
-        self._build_training_ground(self.vision_window, 5)
-
         self.ai_note_var = tk.StringVar(value="Collecting live metrics...")
         tk.Label(
             self.vision_window,
@@ -4644,11 +4873,10 @@ class TelemetryWindow:
             padx=12, pady=9,
             wraplength=1120,
             justify="left",
-        ).grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 14))
+        ).grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 14))
 
         self.vision_window.grid_rowconfigure(1, weight=3)
         self.vision_window.grid_rowconfigure(4, weight=1)
-        self.vision_window.grid_rowconfigure(5, weight=1)
         self.vision_window.grid_columnconfigure(0, weight=1)
 
     def _build_training_ground(self, parent, row):
@@ -5174,7 +5402,6 @@ class TelemetryWindow:
 
         self._flush_test_result()
         self._draw_hero(t_wall)
-        self._tick_training_ground(t_wall)
 
         try:
             self.root.update_idletasks()
@@ -5290,7 +5517,7 @@ def run(
     duration=120.0,
     gui=True,
     scenario=SCENARIO_PARK,
-    flight="pid",
+    flight="ppo",
     battery_start=100.0,
     battery_drain_rate=BATTERY_DRAIN_RATE,
 ):
@@ -5301,7 +5528,8 @@ def run(
     p.setTimeStep(SIM_TIMESTEP, physicsClientId=phys)
 
     if gui:
-        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1, physicsClientId=phys)
+        # Hide PyBullet's built-in side panels; SkyShade has its own dashboard.
+        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0, physicsClientId=phys)
         p.configureDebugVisualizer(p.COV_ENABLE_MOUSE_PICKING, 1, physicsClientId=phys)
         if scenario == SCENARIO_FOREST:
             p.resetDebugVisualizerCamera(
@@ -5324,7 +5552,7 @@ def run(
 
     flight_controller = RuntimeFlightController(flight)
     if flight_controller.fallback_reason:
-        print(f"[flight] Q-learning unavailable; falling back to PID ({flight_controller.fallback_reason})")
+        print(f"[flight] Learned flight fallback: {flight_controller.fallback_reason}")
 
     obstacles = build_environment(phys, scenario)
     initial_user_pos = scenario_user_position(scenario, 0.0)
@@ -5332,7 +5560,7 @@ def run(
     # Drone and user are assembled from primitive bodies so the scene has a
     # readable physical scale while the AI/control code keeps the same inputs.
     drone_id, drone_parts = create_drone(phys, initial_user_pos[:2])
-    drone_damping = LINEAR_DAMPING if flight_controller.using_q else RUNTIME_PID_DAMPING
+    drone_damping = LINEAR_DAMPING if flight_controller.using_learned else RUNTIME_PID_DAMPING
     p.changeDynamics(
         drone_id, -1, mass=DRONE_MASS_KG,
         linearDamping=drone_damping, angularDamping=0.9,
@@ -5395,7 +5623,7 @@ def run(
     _stats_err_xy   = []   # hover error each tick (m)
     _stats_conf     = []   # tracker confidence
     _stats_umb      = []   # umbrella state per tick (1=deploy, 0=stow)
-    _stats_umb_need = []   # should umbrella be deployed? (rain > 0.3)
+    _stats_umb_need = []   # should umbrella be deployed? mirrors Sub-3 label threshold
     _stats_in_hover = []   # 1 if drone within 0.5m of user, else 0
 
     print(f"SkyShade simulation running ({scenario} scenario) — Ctrl+C to stop.\n")
@@ -5510,7 +5738,7 @@ def run(
                 else:
                     nav_override = raw_override
 
-            # ── Sub-2: flight control (PID or learned Q-policy) ──────────────
+            # ── Sub-2: flight control (PPO, legacy Q-table, or PID fallback) ──
             lin_vel, _ = p.getBaseVelocity(drone_id, physicsClientId=phys)
             drone_vel  = np.array(lin_vel)
 
@@ -5554,7 +5782,13 @@ def run(
             )
 
             if DEBUG_WEATHER_LINES and gui and tick % 15 == 0:
-                draw_weather_visuals(phys, weather_now, weather_visual_rng, t_wall)
+                focus_xy = (
+                    (np.array(d_pos2[:2], dtype=float) + user_pos[:2]) * 0.5
+                )
+                draw_weather_visuals(
+                    phys, weather_now, weather_visual_rng, t_wall,
+                    focus_xy=focus_xy,
+                )
 
             # ── Telemetry update (every 10 ticks) ─────────────────────────────
             if tick % 10 == 0:
@@ -5585,7 +5819,8 @@ def run(
             _stats_err_xy.append(_err)
             _stats_conf.append(float(confidence))
             _stats_umb.append(1.0 if umbrella_cmd == "DEPLOY" else 0.0)
-            _stats_umb_need.append(1.0 if weather_now.get("rain", 0) > 0.3 else 0.0)
+            _stats_umb_need.append(
+                1.0 if weather_now.get("rain", 0) >= UMBRELLA_DEPLOY_RAIN_THRESHOLD else 0.0)
             _stats_in_hover.append(1.0 if _err <= 0.5 else 0.0)
 
             # ── Console log every 5 s ─────────────────────────────────────────
@@ -5661,6 +5896,26 @@ def run(
             print("  → Retrain Sub-3 SVM (umbrella decisions are inaccurate)")
         print("═" * 60 + "\n")
 
+        reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        latest_report = {
+            "scenario": scenario,
+            "flight_requested": flight,
+            "flight_controller": flight_controller.label,
+            "duration_s": float(duration),
+            "samples": int(N),
+            "mean_hover_error_m": mean_err,
+            "hover_accuracy_pct": hover_pct,
+            "tracker_lock_pct": mean_conf * 100,
+            "umbrella_correct_pct": umb_acc_pct,
+            "battery_end_pct": float(battery_pct),
+            "overall_pct": float(overall),
+            "grade": grade,
+            "created_at": time.time(),
+        }
+        with open(os.path.join(reports_dir, "run_summary_latest.json"), "w", encoding="utf-8") as f:
+            json.dump(latest_report, f, indent=2)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -5668,9 +5923,9 @@ def main():
     ap.add_argument("--no-gui",   action="store_true")
     ap.add_argument(
         "--flight",
-        choices=["pid", "q"],
-        default="q",
-        help="Flight controller: 'q' for the learned Sub-2 policy, or 'pid' for the fallback baseline.",
+        choices=["ppo", "q", "pid"],
+        default="ppo",
+        help="Flight controller: 'ppo' for the active learned policy, 'q' for legacy Q-table, or 'pid' for fallback baseline.",
     )
     ap.add_argument(
         "--battery-start",

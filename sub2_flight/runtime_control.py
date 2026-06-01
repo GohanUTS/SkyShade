@@ -3,8 +3,8 @@ Runtime flight-control helpers for the integrated SkyShade simulation.
 
 This module keeps Sub-2's flight decisions out of run_sim.py.  The simulator
 provides state (drone pose, velocity, user pose, nav override, wind) and receives
-a corrective force.  PID and Q-learning can then evolve here without spreading
-flight logic through the rest of the project.
+a corrective force.  PPO, legacy Q-learning, and PID can then evolve here
+without spreading flight logic through the rest of the project.
 """
 
 from dataclasses import dataclass
@@ -30,16 +30,17 @@ class FlightControlResult:
     action: str
     reward: float | None
     using_q: bool
+    using_learned: bool
 
 
 def lead_follow_target(
     user_pos,
     user_velocity,
-    lead_seconds: float = 0.85,
-    max_lead_m: float = 1.05,
+    lead_seconds: float = 0.25,
+    max_lead_m: float = 0.35,
     target_altitude: float = TARGET_ALTITUDE,
 ) -> np.ndarray:
-    """Return a hover target slightly ahead of the walking user."""
+    """Return a hover target almost directly above the walking user."""
     lead = np.array(user_velocity[:2], dtype=float) * lead_seconds
     lead_norm = float(np.linalg.norm(lead))
     if lead_norm > max_lead_m:
@@ -89,26 +90,51 @@ def obstacle_avoidance_force(
 class RuntimeFlightController:
     """Runtime adapter — PPO primary, Q-table legacy fallback, PID final fallback."""
 
-    def __init__(self, mode: str = "q"):
-        self.requested_mode = "q" if str(mode).lower().startswith("q") else "pid"
+    def __init__(self, mode: str = "ppo"):
+        raw = str(mode).lower()
+        if raw.startswith("p") and raw != "pid":
+            self.requested_mode = "ppo"
+        elif raw.startswith("q"):
+            self.requested_mode = "q"
+        else:
+            self.requested_mode = "pid"
         self.pid = PIDFlightPolicy()
+        self.pid.KP_XY = 28.0
+        self.pid.KI_XY = 0.08
+        self.pid.KD_XY = 12.0
+        self.pid.MAX_FORCE_XY = 34.0
+        self.pid.KP_Z = 10.0
+        self.pid.KD_Z = 6.0
+        self.pid.MAX_FORCE_Z = 12.0
         self.ppo_policy = None
         self.q_policy = None
         self.fallback_reason = None
 
-        if self.requested_mode == "q":
-            # Try PPO first (current primary policy)
+        if self.requested_mode == "ppo":
             try:
                 self.ppo_policy = PPOFlightPolicy()
-            except (FileNotFoundError, ImportError, Exception) as exc:
-                # Fall back to legacy Q-table
+            except Exception as ppo_exc:
                 try:
                     self.q_policy = FlightPolicy()
-                except (FileNotFoundError, ValueError) as exc2:
-                    self.fallback_reason = str(exc2)
+                    self.fallback_reason = (
+                        f"PPO unavailable ({ppo_exc}); using legacy Q-table"
+                    )
+                except (FileNotFoundError, ValueError) as q_exc:
+                    self.fallback_reason = (
+                        f"PPO unavailable ({ppo_exc}); Q-table unavailable ({q_exc})"
+                    )
+        elif self.requested_mode == "q":
+            try:
+                self.q_policy = FlightPolicy()
+            except (FileNotFoundError, ValueError) as q_exc:
+                self.fallback_reason = f"Q-table unavailable ({q_exc})"
 
     @property
     def using_q(self) -> bool:
+        return self.q_policy is not None
+
+    @property
+    def using_learned(self) -> bool:
         return self.ppo_policy is not None or self.q_policy is not None
 
     @property
@@ -170,7 +196,15 @@ class RuntimeFlightController:
             ], dtype=np.float32)
             obs = np.clip(obs, OBS_LOW, OBS_HIGH)
 
-            force = self.ppo_policy.compute_force(obs, drone_vel)
+            ppo_force = self.ppo_policy.compute_force(obs, drone_vel)
+            # The learned policy gives the motion style, while this light
+            # stabilizer keeps the live demo centred over the user instead of
+            # slowly drifting outside the coverage zone.
+            pid_force = self.pid.compute_force(drone_pos, drone_vel, target_3d, dt)
+            lateral_error = float(np.linalg.norm(delta[:2]))
+            assist = float(np.clip((lateral_error - 0.10) / 0.45, 0.65, 1.0))
+            force = (1.0 - assist) * ppo_force + assist * pid_force
+            force = np.clip(force, -12.0, 12.0)
 
             dist3d = float(np.linalg.norm(drone_pos - target_3d))
             reward = 5.0 if dist3d <= HOVER_RADIUS_M else max(-5.0, -dist3d)
@@ -178,10 +212,11 @@ class RuntimeFlightController:
             return FlightControlResult(
                 force=force,
                 target=target_3d,
-                controller="PPO",
-                action="PPO_VEL",
+                controller="PPO+PID",
+                action="PPO+STABLE",
                 reward=reward,
-                using_q=True,
+                using_q=False,
+                using_learned=True,
             )
 
         # ── Legacy Q-table path ───────────────────────────────────────────────
@@ -205,6 +240,7 @@ class RuntimeFlightController:
                 action=ACTION_NAMES[action],
                 reward=reward,
                 using_q=True,
+                using_learned=True,
             )
 
         # ── PID fallback ──────────────────────────────────────────────────────
@@ -216,4 +252,5 @@ class RuntimeFlightController:
             action="PID_FORCE",
             reward=None,
             using_q=False,
+            using_learned=False,
         )

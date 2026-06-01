@@ -34,7 +34,7 @@ class NavEvalWorker(threading.Thread):
     def __init__(self, progress_queue: queue.Queue, stop_event: threading.Event):
         super().__init__(daemon=True)
         self._q    = progress_queue
-        self._stop = stop_event
+        self._stop_event = stop_event
 
     def run(self):
         try:
@@ -52,7 +52,7 @@ class NavEvalWorker(threading.Thread):
             rewards, successes, all_paths = [], [], []
 
             for ep in range(N_EVAL):
-                if self._stop.is_set():
+                if self._stop_event.is_set():
                     break
 
                 env  = ObstacleNavEnv(max_steps=1_200)

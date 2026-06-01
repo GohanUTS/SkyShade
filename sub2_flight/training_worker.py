@@ -21,8 +21,10 @@ Queue message format
 """
 
 import os
+import json
 import queue
 import threading
+import time
 import traceback
 
 import numpy as np
@@ -56,7 +58,7 @@ class FlightTrainingWorker(threading.Thread):
         super().__init__(daemon=True)
         self._total = total_steps
         self._q     = progress_queue
-        self._stop  = stop_event
+        self._stop_event  = stop_event
 
     def run(self):
         try:
@@ -68,7 +70,7 @@ class FlightTrainingWorker(threading.Thread):
             from sub2_flight.env.ppo_hover_env import PPOHoverEnv
 
             q_ref    = self._q
-            stop_ref = self._stop
+            stop_ref = self._stop_event
 
             class _Callback(BaseCallback):
                 def __init__(self_):
@@ -147,7 +149,18 @@ class FlightTrainingWorker(threading.Thread):
             eff        = _efficiency_pct(model.ep_info_buffer)
             steps_done = cb.num_timesteps
             out        = self.OUTPUT_PATH + ".zip"
-            kind       = "stopped" if self._stop.is_set() else "done"
+            with open(self.OUTPUT_PATH + ".meta.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "subsystem": "Sub-2 Flight",
+                    "algorithm": "PPO",
+                    "model": os.path.basename(out),
+                    "steps_done": int(steps_done),
+                    "efficiency_pct": int(eff),
+                    "warm_started": bool(warm),
+                    "trained_at": time.time(),
+                    "parallel_envs": int(N_ENVS),
+                }, f, indent=2)
+            kind       = "stopped" if self._stop_event.is_set() else "done"
             self._q.put((kind, out, steps_done, eff, warm))
 
         except Exception:

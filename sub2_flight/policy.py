@@ -99,7 +99,7 @@ class PIDFlightPolicy:
 
     Reads continuous position + velocity from the environment each tick and
     outputs a 3-D force vector via env.pid_step().  It is kept as a fallback and
-    comparison baseline for the learned Q-table runtime controller.
+    comparison baseline for the learned PPO/Q-table runtime controllers.
 
     Gains are tuned for:
       DRONE_MASS_KG = 1.5 kg

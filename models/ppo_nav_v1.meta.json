@@ -1,0 +1,10 @@
+{
+  "subsystem": "Sub-4 Navigation",
+  "algorithm": "SAC",
+  "model": "ppo_nav_v1.zip",
+  "steps_done": 4096,
+  "efficiency_pct": 33,
+  "warm_started": true,
+  "trained_at": 1780275662.543573,
+  "legacy_filename": "ppo_nav_v1.zip"
+}

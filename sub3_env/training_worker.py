@@ -13,9 +13,11 @@ Queue message format
 """
 
 import os
+import json
 import pickle
 import queue
 import threading
+import time
 import traceback
 
 import numpy as np
@@ -33,7 +35,7 @@ class SVMTrainingWorker(threading.Thread):
     def __init__(self, progress_queue: queue.Queue, stop_event: threading.Event):
         super().__init__(daemon=True)
         self._q    = progress_queue
-        self._stop = stop_event
+        self._stop_event = stop_event
 
     def run(self):
         try:
@@ -99,6 +101,15 @@ class SVMTrainingWorker(threading.Thread):
             os.makedirs(_MODELS_DIR, exist_ok=True)
             with open(self.OUTPUT_PATH, "wb") as f:
                 pickle.dump(clf, f)
+            with open(self.OUTPUT_PATH + ".meta.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "subsystem": "Sub-3 Weather",
+                    "algorithm": "SVM RBF",
+                    "model": os.path.basename(self.OUTPUT_PATH),
+                    "samples": int(len(y)),
+                    "cv_accuracy": float(acc),
+                    "trained_at": time.time(),
+                }, f, indent=2)
 
             self._q.put(("done", self.OUTPUT_PATH, acc, cm))
 

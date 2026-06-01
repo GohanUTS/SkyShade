@@ -11,6 +11,7 @@ env/
 # Training artefacts — kept only intentional checkpoints (models/ is tracked)
 runs/
 *.log
+reports/
 
 # Matplotlib / output plots generated at runtime
 confusion_matrix.png

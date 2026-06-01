@@ -47,6 +47,19 @@ class UmbrellaClassifier:
         Also updates the feature builder's action history with the committed
         decision so future predictions are context-aware.
         """
+        if rain_raw <= 0.12 and lux >= 25_000:
+            self._current_action = 0
+            self._candidate_action = 0
+            self._candidate_count = 0
+            self._feature_builder.push_action(self._current_action)
+            return self._current_action
+        if rain_raw >= 0.25:
+            self._current_action = 1
+            self._candidate_action = 1
+            self._candidate_count = 0
+            self._feature_builder.push_action(self._current_action)
+            return self._current_action
+
         feat = self._feature_builder.build(lux, rain_raw, wind_speed)
         raw = int(self._pipeline.predict(feat.reshape(1, -1))[0])
 

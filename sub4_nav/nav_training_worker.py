@@ -25,9 +25,13 @@ contains SAC weights — SAC and PPO are not interchangeable at load time.
 """
 
 import os
+import json
 import queue
 import threading
+import time
 import traceback
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/skyshade_mpl")
 
 import numpy as np
 
@@ -59,7 +63,7 @@ class NavTrainingWorker(threading.Thread):
         super().__init__(daemon=True)
         self._total = total_steps
         self._q     = progress_queue
-        self._stop  = stop_event
+        self._stop_event  = stop_event
 
     def run(self):
         try:
@@ -69,7 +73,7 @@ class NavTrainingWorker(threading.Thread):
             from sub4_nav.obstacle_env import ObstacleNavEnv
 
             q_ref    = self._q
-            stop_ref = self._stop
+            stop_ref = self._stop_event
             path_buf: list = []
 
             class _Callback(BaseCallback):
@@ -168,12 +172,37 @@ class NavTrainingWorker(threading.Thread):
             env.close()
 
             os.makedirs(_MODELS_DIR, exist_ok=True)
-            model.save(self.OUTPUT_PATH)
+            tmp_output = self.OUTPUT_PATH + ".tmp"
+            tmp_zip = tmp_output + ".zip"
+            final_zip = self.OUTPUT_PATH + ".zip"
+            try:
+                if os.path.exists(tmp_zip):
+                    os.remove(tmp_zip)
+                if os.path.exists(tmp_output):
+                    os.remove(tmp_output)
+            except OSError:
+                pass
+            model.save(tmp_output)
+            written_tmp = tmp_zip if os.path.exists(tmp_zip) else tmp_output
+            if not os.path.exists(written_tmp) or os.path.getsize(written_tmp) == 0:
+                raise RuntimeError("SAC save failed: no model zip was written")
+            os.replace(written_tmp, final_zip)
 
             eff        = _efficiency_pct(model.ep_info_buffer)
             steps_done = cb.num_timesteps
-            out        = self.OUTPUT_PATH + ".zip"
-            kind       = "stopped" if self._stop.is_set() else "done"
+            out        = final_zip
+            with open(self.OUTPUT_PATH + ".meta.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "subsystem": "Sub-4 Navigation",
+                    "algorithm": "SAC",
+                    "model": os.path.basename(out),
+                    "steps_done": int(steps_done),
+                    "efficiency_pct": int(eff),
+                    "warm_started": bool(warm),
+                    "trained_at": time.time(),
+                    "legacy_filename": "ppo_nav_v1.zip",
+                }, f, indent=2)
+            kind       = "stopped" if self._stop_event.is_set() else "done"
             self._q.put((kind, out, steps_done, eff, warm))
 
         except Exception:

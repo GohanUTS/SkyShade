@@ -1,0 +1,8 @@
+{
+  "subsystem": "Sub-4 Battery Safety",
+  "algorithm": "MDP value iteration",
+  "model": "policy_table_v1.npy",
+  "iterations": 18,
+  "final_delta": 4.60829923554229e-07,
+  "trained_at": 1780274926.735494
+}

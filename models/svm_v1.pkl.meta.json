@@ -1,0 +1,8 @@
+{
+  "subsystem": "Sub-3 Weather",
+  "algorithm": "SVM RBF",
+  "model": "svm_v1.pkl",
+  "samples": 99,
+  "cv_accuracy": 0.96,
+  "trained_at": 1780274925.8765807
+}

@@ -15,8 +15,10 @@ Queue message format
 """
 
 import os
+import json
 import queue
 import threading
+import time
 import traceback
 
 import numpy as np
@@ -36,7 +38,7 @@ class MDPSolverWorker(threading.Thread):
     def __init__(self, progress_queue: queue.Queue, stop_event: threading.Event):
         super().__init__(daemon=True)
         self._q    = progress_queue
-        self._stop = stop_event
+        self._stop_event = stop_event
 
     def run(self):
         try:
@@ -46,7 +48,7 @@ class MDPSolverWorker(threading.Thread):
             V    = np.zeros(N_STATES + 1, dtype=float)
 
             for it in range(self.MAX_ITER):
-                if self._stop.is_set():
+                if self._stop_event.is_set():
                     break
                 V_new = V.copy()
                 for s in range(N_STATES):
@@ -72,8 +74,17 @@ class MDPSolverWorker(threading.Thread):
 
             os.makedirs(_MODELS_DIR, exist_ok=True)
             np.save(self.OUTPUT_PATH, policy)
+            with open(self.OUTPUT_PATH + ".meta.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "subsystem": "Sub-4 Battery Safety",
+                    "algorithm": "MDP value iteration",
+                    "model": os.path.basename(self.OUTPUT_PATH),
+                    "iterations": int(it + 1),
+                    "final_delta": float(delta),
+                    "trained_at": time.time(),
+                }, f, indent=2)
 
-            kind = "stopped" if self._stop.is_set() else "done"
+            kind = "stopped" if self._stop_event.is_set() else "done"
             self._q.put((kind, policy.copy(), V[:N_STATES].copy()))
 
         except Exception:
