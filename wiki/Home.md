@@ -1,15 +1,21 @@
 # SkyShade Wiki
 
-Welcome to the SkyShade project wiki. SkyShade is a fully simulated autonomous drone system that perceives, tracks, and shades a moving user by deploying an umbrella canopy in response to real-time weather conditions.
+SkyShade is a drone that follows you around and holds an umbrella over your head — opening it when it rains and stowing it when the sky clears. The whole thing runs in simulation, and four small AI subsystems do the work: one finds you, one flies the drone, one reads the weather, and one keeps the battery (and your buildings) safe.
 
 **Course:** AI for Robotics — UTS, May 2026  
 **Team:** Gohan Idrisoglu (Lead) · Dinesh Saravanan · Aaron · Saaranj
 
 <p align="center">
+  <img src="images/scene_city.png" alt="SkyShade drone shading a pedestrian in the city scenario" width="820">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> SkyShade in the Building District — the drone hovers over the pedestrian (red cap marker) with its umbrella open, while steering around the buildings.</em></sub></p>
+
+<p align="center">
   <img src="images/architecture.png" alt="SkyShade system architecture" width="820">
 </p>
 
-<p align="center"><sub><em><b>Figure 1.</b> The whole system at a glance — four AI subsystems (perception, flight, weather, navigation/safety) wrapped around a PyBullet physics world. See <a href="Architecture">Architecture</a> for the full walkthrough.</em></sub></p>
+<p align="center"><sub><em><b>Figure 2.</b> How it fits together: three sensor inputs feed four AI subsystems, which drive the drone in a PyBullet world. Full walkthrough on the <a href="Architecture">Architecture</a> page.</em></sub></p>
 
 ---
 

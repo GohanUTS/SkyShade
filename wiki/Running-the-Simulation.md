@@ -56,6 +56,12 @@ python3 run_sim.py --no-gui              # headless, no PyBullet window
 ### Park (default)
 Open park with benches, small trees, and a figure-8 walking path. Best for first runs and PPO training validation. The drone follows the user on a smooth closed loop.
 
+<p align="center">
+  <img src="images/scene_park.png" alt="Park scenario" width="640">
+</p>
+
+<p align="center"><sub><em>The Park scenario — open lawn, scattered trees and benches, with the drone trailing the user. The calmest scene, and the one where hover accuracy is highest.</em></sub></p>
+
 ### Forest Trail
 Dense tree canopy with a 18 m dirt trail. The user walks at 0.42 m/s; the drone must avoid trunks while keeping the red cap marker in view through gaps in the canopy. The trail resets (drone teleports) when the user completes a lap.
 
@@ -76,6 +82,14 @@ Instead of staying boxed in the plaza, the user now **walks a footpath tour** �
 </p>
 
 <p align="center"><sub><em><b>Figure 1.</b> The proximity logic in <code>run_sim.py</code> (Building District only). Each tick it computes the drone's clearance to the nearest building; below <code>NEAR_MISS_CLEARANCE</code> it warns, and only if the drone is actually inside the wall (avoidance failed) does it count a collision. The debounce flags mean one alert per approach, not per frame.</em></sub></p>
+
+The tour itself is just a short parametric path — walk out to a recorded building approach point, hold, walk back, advance to the next one:
+
+<p align="center">
+  <img src="images/code_citywalk.png" alt="city walk path source" width="660">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> <code>city_walk()</code> in <code>run_sim.py</code> — an out-and-back ease between the plaza and each inner-ring building, which is what leads the follower drone up to the buildings in the first place.</em></sub></p>
 
 This makes the city a good place to *watch how the drone handles buildings* — it should weave around them, with the report reading "flew close, avoided".
 
@@ -134,31 +148,19 @@ Colours: **green** = healthy/good, **amber** = watch, **red** = critical.
 
 ## After the simulation — Simulation Complete dialog
 
-When the scenario finishes (or when you close the dashboard), the **Simulation Complete** dialog appears instead of the process just exiting.
+When the scenario finishes (or when you close the dashboard), a **Simulation Complete** dialog pops up instead of the process just vanishing. It shows the graded report, lets you tick which subsystems to retrain, and offers to relaunch — all without going back to the launcher.
 
-```
-┌─ Simulation Complete ────────────────────────────────────────────┐
-│ Scenario: Park · 120 s · Flight: PPO                             │
-│                                                                  │
-│ Post-Run Efficiency Report  —  tick subsystems to retrain        │
-│ ──────────────────────────────────────────────────────────────   │
-│   [ ] Sub-1  Tracker lock       93.1%   ✓ reliable              │
-│   [✓] Sub-2  Hover accuracy     37.2%   ✗ train more  ← auto    │
-│           Mean hover error       0.59 m  ~ close                 │
-│   [ ] Sub-3  Umbrella correct   91.4%   ✓ accurate              │
-│   [ ] Sub-4  Battery MDP + Nav  40.1% left ✓ safe              │
-│ ──────────────────────────────────────────────────────────────   │
-│  Overall score:  74%    Grade: B                                  │
-│  → Sub-2 PPO needs more hover training                           │
-│  ┌─ Performance trend (5 runs) ──────────────────────────────┐   │
-│  │  70 ██  71 ██  32 ██  40 ██  74 ██   ← bars + trend line │   │
-│  └───────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  Run next scenario:  [Park]  [Forest Trail]  [Buildings]  [Trail]│
-│                                                                  │
-│  [Retrain Selected & Run]   [Run Again]   [Close]               │
-└──────────────────────────────────────────────────────────────────┘
-```
+A typical report looks like this:
+
+| Subsystem | Metric | Verdict |
+|---|---|---|
+| Sub-1 Perception | Tracker lock **93%** | ✅ reliable |
+| Sub-2 Flight | Hover accuracy **37%** · error 0.59 m | ❌ train more *(auto-ticked)* |
+| Sub-3 Weather | Umbrella correct **91%** | ✅ accurate |
+| Sub-4 Nav/Safety | Battery **40%** at end | ✅ safe |
+| **Overall** | **74% · Grade B** | → *Sub-2 PPO needs more hover training* |
+
+Underneath sits a **performance-trend bar chart** (overall % across your last runs, coloured by grade), a **scenario picker** (Park / Forest Trail / Buildings / Urban Trail), and three buttons:
 
 ### Buttons
 

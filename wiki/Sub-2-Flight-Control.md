@@ -4,6 +4,12 @@
 
 Keep the drone hovering directly above the user at `TARGET_ALTITUDE` (2.5 m), following them as they walk. Yield control to Sub-4 when a safety override is active.
 
+<p align="center">
+  <img src="images/scene_drone.png" alt="Close-up of the SkyShade drone and umbrella" width="520">
+</p>
+
+<p align="center"><sub><em>The drone Sub-2 flies — an X-frame quadcopter carrying the open umbrella canopy, holding station above the user.</em></sub></p>
+
 ---
 
 ## Runtime controller — PPO (primary)
@@ -40,6 +46,18 @@ RuntimeFlightController.compute_force():
 | `CONTINUE` | Lead-follow ahead of walking user |
 | `RTH` | (0, 0, TARGET_ALTITUDE) |
 | `LAND_NOW` | Current XY, descend to 0.3 m (PID forced) |
+
+---
+
+### How PPO and PID share the wheel
+
+At runtime the PID does the actual following (it's rock-solid), and the PPO policy only nudges the style when the drone is already close. A quick-trained PPO can fire wild forces, so its output is clamped first — it can never yank the drone off the user:
+
+<p align="center">
+  <img src="images/code_flight_blend.png" alt="PPO+PID blend source" width="680">
+</p>
+
+<p align="center"><sub><em><b>Figure (control blend).</b> <code>runtime_control.py</code>: the PPO force is clamped, then blended with PID by an <code>assist</code> weight that rises to pure PID as error grows. Past 3 m it drops to boosted PID to recover fast.</em></sub></p>
 
 ---
 

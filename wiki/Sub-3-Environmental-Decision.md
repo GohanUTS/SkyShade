@@ -45,6 +45,16 @@ PCA to 3 components is used for visualisation only (`pca_3d.png`) — the SVM tr
 
 ---
 
+The feature vector is assembled once per second by a small `FeatureBuilder`:
+
+<p align="center">
+  <img src="images/code_features.png" alt="feature engineering source" width="640">
+</p>
+
+<p align="center"><sub><em><b>Figure (features).</b> <code>feature_engineering.py</code>: the three raw readings, their per-step deltas, and the last three umbrella decisions become the 9-D vector the SVM classifies.</em></sub></p>
+
+---
+
 ## Classifier configuration
 
 | Parameter | Value |

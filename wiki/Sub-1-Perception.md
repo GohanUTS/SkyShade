@@ -42,6 +42,18 @@ Identify the user in the simulated downward-facing camera feed and publish their
 
 ---
 
+## From pixels to metres
+
+Once the tracker has the marker's pixel position and width, a pinhole camera model turns that into a real `(dx, dy, dz)` offset in the drone's body frame — the apparent width shrinks with distance, so it doubles as a cheap range-finder:
+
+<p align="center">
+  <img src="images/code_distance.png" alt="distance estimator source" width="680">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> <code>distance_estimator.py</code>: <code>dz</code> comes from the known marker width vs. its apparent pixel width, then the image-plane offset is back-projected to give <code>dx</code> (east) and <code>dy</code> (north).</em></sub></p>
+
+---
+
 ## Visual servo
 
 The visual servo is a **closed-loop pixel-space controller** that runs every frame alongside the predictive gimbal:
@@ -82,6 +94,12 @@ In dense environments (forest canopy, crowd scenes), a small marker is frequentl
 ## Training Grounds — calibration room
 
 Sub-1 uses a deterministic HSV tracker — no neural network model is trained. The Training Grounds hub provides a live calibration check.
+
+<p align="center">
+  <img src="images/scene_pov.png" alt="Drone downward camera view of the user" width="600">
+</p>
+
+<p align="center"><sub><em><b>Figure 3.</b> What the tracker works with — the drone's downward camera image. The bright red cap marker is unmistakable against the street, which is exactly why a simple HSV threshold locks onto it so reliably.</em></sub></p>
 
 ### What the calibration room shows
 

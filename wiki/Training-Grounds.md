@@ -49,27 +49,16 @@ The hub window is titled **SkyShade — Training Grounds** and has four tabs alo
 
 ## Layout overview
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  SkyShade — Training Grounds   Train each subsystem before launch.  │
-├────────────────────┬──────────────────────┬─────────────────────────┤
-│  Sub-1 Perception  │  Sub-2  Flight PPO   │  Sub-4  Nav Safety      │
-└────────────────────┴──────────────────────┴─────────────────────────┘
-│                                                                      │
-│   LEFT PANEL (60%)                RIGHT PANEL (40%)                  │
-│   ─────────────                   ────────────────                   │
-│   3D animated scene               Reward curve / chart               │
-│   (auto-rotates)                  (updates live during training)     │
-│                                                                      │
-│   [ Controls / buttons / status bar ]                                │
-│                                                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  Sub-1 Perception ●   Sub-2 Flight PPO ○   Sub-4 Battery MDP ●     │
-│  Sub-4 Nav SAC ●   Launch the main sim from the SkyShade Launcher.  │
-└──────────────────────────────────────────────────────────────────────┘
-```
+The hub is a tabbed window — one tab per trainable subsystem. Every tab follows the same split:
 
-The footer shows a `●` (trained/ready) or `○` (not yet trained) badge for each model. The sim can be launched from the launcher window once all required models are ready.
+| Region | What's there |
+|---|---|
+| **Tabs** (top) | Sub-1 Perception · Sub-2 Flight PPO · Sub-3 Weather SVM · Sub-4 Nav Safety |
+| **Left panel** (~60%) | A live 3D scene that auto-rotates while training (drone, lidar rays, wind arrows…) |
+| **Right panel** (~40%) | The reward / accuracy / convergence chart, updating in real time |
+| **Bottom** | Controls + status bar, and a `●` (ready) / `○` (not trained yet) badge per model |
+
+Once every required model shows `●`, head back to the launcher and hit **Launch**.
 
 ---
 

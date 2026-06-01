@@ -10,21 +10,15 @@ SkyShade has two main GUI windows: the **Launcher** (where you train and configu
 python3 run_sim.py
 ```
 
-The launcher opens automatically. It has two columns:
+The launcher opens automatically. It's split into two columns:
 
-```
-┌──────────────────────────────────┬──────────────────────────────────────┐
-│  Training Ground (left)          │  Scenario + Mission Setup (right)    │
-│                                  │                                      │
-│  Sub-1 Perception  [Calibrate]   │  [Park]  [Forest Trail]  [Buildings] │
-│  Sub-2 Flight      [Train PPO]   │                                      │
-│  Sub-3 Weather     [Train SVM]   │  Duration: [120]  seconds            │
-│  Sub-4 Nav Safety  [Solve MDP]   │                                      │
-│                                  │  Flight Control: PPO active          │
-│  [🚀 Auto-Train All  (~3 min)]   │                                      │
-│  [🔄 Auto-Retrain from Scratch]  │  [ Launch ]   [ Cancel ]             │
-└──────────────────────────────────┴──────────────────────────────────────┘
-```
+| Left column — **Training Ground** | Right column — **Scenario & Mission** |
+|---|---|
+| 🎥 Sub-1 Perception → **Calibrate** | Scenario: **Park · Forest Trail · Buildings · Urban Trail** |
+| 🚁 Sub-2 Flight → **Train PPO** | Duration: text box (default `120` s) |
+| 🌧️ Sub-3 Weather → **Train SVM** | Flight control: PPO (falls back to PID) |
+| 🧭 Sub-4 Nav Safety → **Solve MDP** | **Launch** / **Cancel** buttons |
+| 🚀 **Auto-Train All** · 🔄 **Auto-Retrain from Scratch** | |
 
 ### Fastest way — Auto-Train buttons
 
@@ -109,32 +103,24 @@ The physics world renders in real time. You can:
 
 ### Drone POV and AI Evidence dashboard
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Drone POV: camera feed with red-marker detection            │
-│                                                              │
-│   ┌─────────────────────────────────────┐                   │
-│   │  [Camera image with bounding box,   │                   │
-│   │   crosshair, and detection overlay] │                   │
-│   └─────────────────────────────────────┘                   │
-│                                                              │
-│  AI gimbal: right + back + down (predictive track)           │
-│  Runtime AI evidence: live tracking, control, avoidance,     │
-│  and decisions.                                              │
-│                                                              │
-│  Marker tracking  ━━━━━━━━━━━━                               │
-│  Tree avoidance   ━━━━━━━━━━━━                               │
-│  Umbrella dec.    ━━━━━━━━━━━━                               │
-│  Coverage error   ━━━━━━━━━━━━                               │
-│  Battery          ━━━━━━━━━━━━                               │
-│                                                              │
-│  Sub-1 Camera ● live check                                   │
-│  Sub-2 Flight  Q-learning                                    │
-│  Sub-3 Weather  SVM                                          │
-│  Sub-4 Safety  MDP                                           │
-│  Environment  scenarios                                      │
-└──────────────────────────────────────────────────────────────┘
-```
+The POV window is what the drone's downward camera actually sees — the user's red cap marker dead in the frame, with the detection box and crosshair drawn on top.
+
+<p align="center">
+  <img src="images/scene_pov.png" alt="Drone downward POV camera view" width="640">
+</p>
+
+<p align="center"><sub><em>The drone's-eye view: it looks straight down and keeps the red marker centred as the user walks the city streets.</em></sub></p>
+
+Below the camera feed, the window stacks five live traces and a row of subsystem status pills:
+
+| Section | What it shows |
+|---|---|
+| 📷 **Camera feed** | Live downward image + green detection box, crosshair, and gimbal direction |
+| 📈 **Marker tracking** | Sub-1 confidence over time (higher = locked on) |
+| 🌲 **Avoidance force** | Sub-2 repulsion spikes when near trees / buildings / crowds |
+| ☂️ **Umbrella decision** | Sub-3 stepping between STOW (0) and DEPLOY (1) |
+| 🔋 **Coverage error & battery** | Distance from the user, and battery draining over the run |
+| 🟢 **Status pills** | Sub-1 Camera · Sub-2 Flight · Sub-3 Weather · Sub-4 Safety · Environment |
 
 #### Camera feed (top section)
 
