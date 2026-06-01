@@ -24,6 +24,7 @@ import traceback
 import numpy as np
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "mdp_solver")
 
 
 class MDPSolverWorker(threading.Thread):
@@ -44,6 +45,20 @@ class MDPSolverWorker(threading.Thread):
         try:
             from sub4_nav.mdp import build_transitions, N_STATES, N_ACTIONS
 
+            # TensorBoard writer — graceful no-op if torch not available
+            _tb = None
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+                _run_tag = time.strftime("%Y%m%d_%H%M%S")
+                _tb_dir  = os.path.join(_RUNS_DIR, _run_tag)
+                os.makedirs(_tb_dir, exist_ok=True)
+                _tb = SummaryWriter(_tb_dir)
+                print(f"\n  [TensorBoard] tensorboard --logdir "
+                      f"{os.path.abspath(os.path.join(_RUNS_DIR, '..', '..', 'runs'))}"
+                      f"\n  Logging MDP solver → {_tb_dir}\n")
+            except Exception:
+                pass
+
             T, R = build_transitions()
             V    = np.zeros(N_STATES + 1, dtype=float)
 
@@ -60,6 +75,10 @@ class MDPSolverWorker(threading.Thread):
                 delta = float(np.max(np.abs(V_new[:N_STATES] - V[:N_STATES])))
                 V = V_new
                 self._q.put(("iter", it + 1, delta))
+                if _tb is not None:
+                    _tb.add_scalar("mdp/convergence_delta", delta, it + 1)
+                    _tb.add_scalar("mdp/log10_delta",
+                                   float(np.log10(max(delta, 1e-12))), it + 1)
                 if delta < self.CONVERGENCE_DELTA:
                     break
 
@@ -83,6 +102,12 @@ class MDPSolverWorker(threading.Thread):
                     "final_delta": float(delta),
                     "trained_at": time.time(),
                 }, f, indent=2)
+
+            if _tb is not None:
+                _tb.add_scalar("mdp/final_delta", float(delta), 0)
+                _tb.add_scalar("mdp/iterations_to_converge", int(it + 1), 0)
+                _tb.flush()
+                _tb.close()
 
             kind = "stopped" if self._stop_event.is_set() else "done"
             self._q.put((kind, policy.copy(), V[:N_STATES].copy()))

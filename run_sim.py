@@ -6074,6 +6074,25 @@ def _telemetry_payload(
     )
 
 
+def _make_sim_tb_writer(scenario):
+    """Create a TensorBoard SummaryWriter for live simulation metrics.
+    Returns None gracefully if torch / tensorboard are unavailable."""
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+        _ts      = time.strftime("%Y%m%d_%H%M%S")
+        _runs    = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "runs", "sim")
+        _tb_dir  = os.path.join(_runs, f"{scenario}_{_ts}")
+        os.makedirs(_tb_dir, exist_ok=True)
+        writer   = SummaryWriter(_tb_dir)
+        _logdir  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
+        print(f"\n  \033[36m[TensorBoard]\033[0m  tensorboard --logdir {_logdir}"
+              f"\n  Logging sim/{scenario} → {_tb_dir}\n")
+        return writer
+    except Exception:
+        return None
+
+
 def run(
     duration=120.0,
     gui=True,
@@ -6082,6 +6101,8 @@ def run(
     battery_start=100.0,
     battery_drain_rate=BATTERY_DRAIN_RATE,
 ):
+    tb_writer = _make_sim_tb_writer(scenario)   # TensorBoard live logging
+
     mode = p.GUI if gui else p.DIRECT
     phys = p.connect(mode)
     p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=phys)
@@ -6552,12 +6573,32 @@ def run(
                 1.0 if weather_now.get("rain", 0) >= UMBRELLA_DEPLOY_RAIN_THRESHOLD else 0.0)
             _stats_in_hover.append(1.0 if _err <= 0.5 else 0.0)
 
-            # Downsample at 1 Hz for persistent history
+            # Downsample at 1 Hz — history file + TensorBoard
             if tick % CONTROL_HZ == 0:
                 _hist_series["confidence"].append(round(float(confidence), 3))
                 _hist_series["hover_error"].append(round(_err, 3))
                 _hist_series["battery"].append(round(float(battery_pct), 1))
                 _hist_series["umbrella"].append(1.0 if umbrella_cmd == "DEPLOY" else 0.0)
+
+                if tb_writer is not None:
+                    _step = int(t_wall)
+                    tb_writer.add_scalar("sim/tracker_confidence",     float(confidence),      _step)
+                    tb_writer.add_scalar("sim/hover_error_m",          _err,                   _step)
+                    tb_writer.add_scalar("sim/avoidance_force_n",
+                                         float(np.linalg.norm(avoidance_for_display[:2])),     _step)
+                    tb_writer.add_scalar("sim/battery_pct",            float(battery_pct),     _step)
+                    tb_writer.add_scalar("sim/umbrella_deployed",
+                                         1.0 if umbrella_cmd == "DEPLOY" else 0.0,            _step)
+                    tb_writer.add_scalar("sim/nav_override",
+                                         {"CONTINUE": 0, "RTH": 1,
+                                          "LAND_NOW": 2}.get(nav_override, 0),                 _step)
+                    tb_writer.add_scalar("sim/weather_rain",
+                                         float(weather_now.get("rain", 0)),                    _step)
+                    tb_writer.add_scalar("sim/weather_wind",
+                                         float(weather_now.get("wind", 0)),                    _step)
+                    if flight_cmd.reward is not None:
+                        tb_writer.add_scalar("sim/flight_reward",
+                                             float(flight_cmd.reward),                         _step)
 
             # ── Console log every 5 s ─────────────────────────────────────────
             if tick % (CONTROL_HZ * 5) == 0:
@@ -6592,6 +6633,8 @@ def run(
         telemetry.close()
         p.disconnect(phys)
         print("Disconnected.")
+        if tb_writer is not None:
+            tb_writer.flush()
 
     # ── End-of-sim efficiency report ─────────────────────────────────────────
     if _stats_err_xy:
@@ -6688,6 +6731,19 @@ def run(
             "series":               _hist_series,
         })
 
+        # Write final efficiency stats to TensorBoard then close the writer
+        if tb_writer is not None:
+            _grade_num = {"A": 4, "B": 3, "C": 2, "D": 1}.get(grade, 0)
+            tb_writer.add_scalar("results/hover_accuracy_pct",    hover_pct,         0)
+            tb_writer.add_scalar("results/mean_hover_error_m",    mean_err,          0)
+            tb_writer.add_scalar("results/tracker_lock_pct",      mean_conf * 100,   0)
+            tb_writer.add_scalar("results/umbrella_correct_pct",  umb_acc_pct,       0)
+            tb_writer.add_scalar("results/battery_end_pct",       float(battery_pct),0)
+            tb_writer.add_scalar("results/overall_score_pct",     float(overall),    0)
+            tb_writer.add_scalar("results/grade_numeric",         _grade_num,        0)
+            tb_writer.flush()
+            tb_writer.close()
+
         return {
             "hover_pct":   hover_pct,
             "mean_err":    mean_err,
@@ -6697,6 +6753,11 @@ def run(
             "overall":     float(overall),
             "grade":       grade,
         }
+
+    # No stats — still close writer if open
+    if tb_writer is not None:
+        tb_writer.flush()
+        tb_writer.close()
     return None
 
 

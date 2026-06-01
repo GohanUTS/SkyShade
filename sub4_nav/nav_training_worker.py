@@ -36,6 +36,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/skyshade_mpl")
 import numpy as np
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "nav_sac")
 
 # TensorBoard event logs land in <repo>/runs/ (already git-ignored).  Override
 # with SKYSHADE_TB_DIR, or disable entirely with SKYSHADE_TB=0.
@@ -128,6 +129,10 @@ class NavTrainingWorker(threading.Thread):
                         # rollout/ and train/ scalars).
                         self_.logger.record("navigation/mean_reward", mr)
                         q_ref.put(("progress", n, mr, viz))
+                        # Custom TensorBoard scalars
+                        self_.logger.record("navigation/mean_episode_reward", mr)
+                        self_.logger.record("navigation/path_length",
+                                            len(path_buf))
                         self_._last_n = n
 
                     return True
@@ -135,6 +140,16 @@ class NavTrainingWorker(threading.Thread):
             np.random.seed(42)
             env = Monitor(ObstacleNavEnv(
                 obstacles=scenario_obstacles(self._scenario)))
+
+            os.makedirs(_RUNS_DIR, exist_ok=True)
+            from stable_baselines3.common.logger import configure as _sb3_configure
+            _tb_logger = _sb3_configure(
+                folder=_RUNS_DIR,
+                format_strings=["tensorboard", "stdout"],
+            )
+            print(f"\n  [TensorBoard] tensorboard --logdir "
+                  f"{os.path.abspath(os.path.join(_RUNS_DIR, '..', '..', 'runs'))}"
+                  f"\n  Logging Nav SAC training → {_RUNS_DIR}\n")
 
             # ── Warm-start: load existing SAC model if present ───────────────
             zip_path = self.OUTPUT_PATH + ".zip"
@@ -146,7 +161,7 @@ class NavTrainingWorker(threading.Thread):
                     # catch it and fall back to a fresh SAC model.
                     model = SAC.load(self.OUTPUT_PATH, env=env,
                                      learning_rate=5e-5)
-                    model.tensorboard_log = _TB_DIR   # saved models don't carry this
+                    model.set_logger(_tb_logger)
                     q_ref.put(("progress", 0, 1, 0.0))
                 except Exception:
                     warm = False
@@ -154,13 +169,14 @@ class NavTrainingWorker(threading.Thread):
             if model is None:
                 model = SAC(
                     "MlpPolicy", env,
+                    tensorboard_log  = _RUNS_DIR,
                     learning_rate    = 3e-4,
-                    buffer_size      = 100_000,   # replay buffer (off-policy memory)
-                    batch_size       = 256,        # larger batches for stable Q-learning
-                    tau              = 0.005,      # soft target-network update speed
+                    buffer_size      = 100_000,
+                    batch_size       = 256,
+                    tau              = 0.005,
                     gamma            = 0.99,
-                    ent_coef         = "auto",     # automatic entropy: self-regulating exploration
-                    learning_starts  = 1_000,      # collect this many steps before first update
+                    ent_coef         = "auto",
+                    learning_starts  = 1_000,
                     train_freq       = 1,
                     gradient_steps   = 1,
                     policy_kwargs    = {"net_arch": [256, 256]},
@@ -168,6 +184,7 @@ class NavTrainingWorker(threading.Thread):
                     verbose          = 0,
                     tensorboard_log  = _TB_DIR,
                 )
+                model.set_logger(_tb_logger)
                 # Remove incompatible old file so next run doesn't try to load it
                 try:
                     if os.path.exists(zip_path):

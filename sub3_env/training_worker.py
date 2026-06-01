@@ -22,9 +22,10 @@ import traceback
 
 import numpy as np
 
-_MODELS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-_DATA_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
-                             "env_sensor_log.csv")
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
+_DATA_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
+                            "env_sensor_log.csv")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "svm")
 
 
 class SVMTrainingWorker(threading.Thread):
@@ -110,6 +111,32 @@ class SVMTrainingWorker(threading.Thread):
                     "cv_accuracy": float(acc),
                     "trained_at": time.time(),
                 }, f, indent=2)
+
+            # ── TensorBoard ────────────────────────────────────────────────────
+            try:
+                from torch.utils.tensorboard import SummaryWriter
+                _run_tag = time.strftime("%Y%m%d_%H%M%S")
+                _tb_dir  = os.path.join(_RUNS_DIR, _run_tag)
+                os.makedirs(_tb_dir, exist_ok=True)
+                _tb = SummaryWriter(_tb_dir)
+                print(f"\n  [TensorBoard] tensorboard --logdir "
+                      f"{os.path.abspath(os.path.join(_RUNS_DIR, '..', '..', 'runs'))}"
+                      f"\n  Logging SVM training → {_tb_dir}\n")
+                _tb.add_scalar("svm/cv_accuracy", acc, 0)
+                _tb.add_scalar("svm/cv_accuracy_pct", acc * 100, 0)
+                _tb.add_scalar("svm/n_samples", len(y), 0)
+                # Per-class accuracy from confusion matrix
+                for cls_i, cls_name in enumerate(["stow", "deploy"]):
+                    if cm.shape[0] > cls_i:
+                        cls_acc = cm[cls_i, cls_i] / max(1, cm[cls_i].sum())
+                        _tb.add_scalar(f"svm/class_{cls_name}_accuracy", cls_acc, 0)
+                # Per CV-fold scores
+                for fold_i, fold_score in enumerate(scores):
+                    _tb.add_scalar("svm/fold_accuracy", fold_score, fold_i)
+                _tb.flush()
+                _tb.close()
+            except Exception:
+                pass  # TensorBoard optional
 
             self._q.put(("done", self.OUTPUT_PATH, acc, cm))
 
