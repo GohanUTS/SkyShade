@@ -25,7 +25,7 @@ import numpy as np
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
 _DATA_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data",
                             "env_sensor_log.csv")
-_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "svm")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "sub3_weather")
 
 
 class SVMTrainingWorker(threading.Thread):
@@ -122,17 +122,15 @@ class SVMTrainingWorker(threading.Thread):
                 print(f"\n  [TensorBoard] tensorboard --logdir "
                       f"{os.path.abspath(os.path.join(_RUNS_DIR, '..', '..', 'runs'))}"
                       f"\n  Logging SVM training → {_tb_dir}\n")
-                _tb.add_scalar("svm/cv_accuracy", acc, 0)
-                _tb.add_scalar("svm/cv_accuracy_pct", acc * 100, 0)
-                _tb.add_scalar("svm/n_samples", len(y), 0)
-                # Per-class accuracy from confusion matrix
+                _tb.add_scalar("sub3_weather/cv_accuracy",     acc,         0)
+                _tb.add_scalar("sub3_weather/cv_accuracy_pct", acc * 100,   0)
+                _tb.add_scalar("sub3_weather/n_samples",       len(y),      0)
                 for cls_i, cls_name in enumerate(["stow", "deploy"]):
                     if cm.shape[0] > cls_i:
                         cls_acc = cm[cls_i, cls_i] / max(1, cm[cls_i].sum())
-                        _tb.add_scalar(f"svm/class_{cls_name}_accuracy", cls_acc, 0)
-                # Per CV-fold scores
+                        _tb.add_scalar(f"sub3_weather/class_{cls_name}_accuracy", cls_acc, 0)
                 for fold_i, fold_score in enumerate(scores):
-                    _tb.add_scalar("svm/fold_accuracy", fold_score, fold_i)
+                    _tb.add_scalar("sub3_weather/fold_accuracy", fold_score, fold_i)
                 _tb.flush()
                 _tb.close()
             except Exception:

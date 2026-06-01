@@ -24,7 +24,7 @@ import traceback
 import numpy as np
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "mdp_solver")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "sub4_battery_mdp")
 
 
 class MDPSolverWorker(threading.Thread):
@@ -76,8 +76,8 @@ class MDPSolverWorker(threading.Thread):
                 V = V_new
                 self._q.put(("iter", it + 1, delta))
                 if _tb is not None:
-                    _tb.add_scalar("mdp/convergence_delta", delta, it + 1)
-                    _tb.add_scalar("mdp/log10_delta",
+                    _tb.add_scalar("sub4_battery/convergence_delta", delta, it + 1)
+                    _tb.add_scalar("sub4_battery/log10_delta",
                                    float(np.log10(max(delta, 1e-12))), it + 1)
                 if delta < self.CONVERGENCE_DELTA:
                     break
@@ -104,8 +104,8 @@ class MDPSolverWorker(threading.Thread):
                 }, f, indent=2)
 
             if _tb is not None:
-                _tb.add_scalar("mdp/final_delta", float(delta), 0)
-                _tb.add_scalar("mdp/iterations_to_converge", int(it + 1), 0)
+                _tb.add_scalar("sub4_battery/final_delta",            float(delta), 0)
+                _tb.add_scalar("sub4_battery/iterations_to_converge", int(it + 1), 0)
                 _tb.flush()
                 _tb.close()
 

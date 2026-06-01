@@ -36,7 +36,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/skyshade_mpl")
 import numpy as np
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "nav_sac")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "sub4_nav")
 
 # TensorBoard event logs land in <repo>/runs/ (already git-ignored).  Override
 # with SKYSHADE_TB_DIR, or disable entirely with SKYSHADE_TB=0.
@@ -129,10 +129,9 @@ class NavTrainingWorker(threading.Thread):
                         # rollout/ and train/ scalars).
                         self_.logger.record("navigation/mean_reward", mr)
                         q_ref.put(("progress", n, mr, viz))
-                        # Custom TensorBoard scalars
-                        self_.logger.record("navigation/mean_episode_reward", mr)
-                        self_.logger.record("navigation/path_length",
-                                            len(path_buf))
+                        # Custom scalars — sub4 prefix
+                        self_.logger.record("sub4_nav/mean_episode_reward", mr)
+                        self_.logger.record("sub4_nav/path_length",         len(path_buf))
                         self_._last_n = n
 
                     return True

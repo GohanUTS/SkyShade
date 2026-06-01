@@ -30,7 +30,7 @@ import traceback
 import numpy as np
 
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models")
-_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "ppo_flight")
+_RUNS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "runs", "sub2_flight")
 
 # TensorBoard event logs land in <repo>/runs/ (already git-ignored).  Override
 # with SKYSHADE_TB_DIR, or disable entirely with SKYSHADE_TB=0.
@@ -98,9 +98,9 @@ class FlightTrainingWorker(threading.Thread):
                     self_.logger.record("flight/mean_reward", mean_r)
                     self_.logger.record("flight/curriculum_stage", stage)
                     q_ref.put(("progress", n, stage, mean_r))
-                    # Custom TensorBoard scalars (SB3 dumps these with built-in metrics)
-                    self_.logger.record("curriculum/stage",               stage)
-                    self_.logger.record("curriculum/mean_episode_reward", mean_r)
+                    # Custom scalars — prefixed sub2 so TensorBoard groups them
+                    self_.logger.record("sub2_flight/curriculum_stage",       stage)
+                    self_.logger.record("sub2_flight/mean_episode_reward",    mean_r)
 
             np.random.seed(0)
 
