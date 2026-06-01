@@ -158,7 +158,6 @@ class FlightTrainingWorker(threading.Thread):
                     ent_coef      = 0.01,
                     policy_kwargs = {"net_arch": [256, 256]},
                     seed=0, verbose=0,
-                    tensorboard_log = _TB_DIR,
                 )
                 model.set_logger(_tb_logger)
 
