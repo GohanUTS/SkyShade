@@ -181,7 +181,6 @@ class NavTrainingWorker(threading.Thread):
                     policy_kwargs    = {"net_arch": [256, 256]},
                     seed             = 42,
                     verbose          = 0,
-                    tensorboard_log  = _TB_DIR,
                 )
                 model.set_logger(_tb_logger)
                 # Remove incompatible old file so next run doesn't try to load it

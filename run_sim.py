@@ -4130,9 +4130,19 @@ class TrainingGroundsHub:
                 self._nav_status_var.set(f"Eval error: {msg[1][:80]}")
 
         self._gate_var.set(self._gate_text())
-        # Advance auto-train sequence if active
+        # Advance auto-train sequence if active.  Guard it: an exception here used
+        # to skip the reschedule below and freeze the whole hub — never again.
         if self._auto_stage >= 0:
-            self._auto_tick()
+            try:
+                self._auto_tick()
+            except Exception as exc:
+                import traceback as _tb
+                _tb.print_exc()
+                self._auto_failed_msg = f"Auto-train error: {exc}"[:140]
+                try:
+                    self._show_auto_complete()
+                except Exception:
+                    self._auto_stage = -1
         self.window.after(350, self._tick)
 
     # _do_launch removed — hub is training-only; sim launch uses main Launcher
