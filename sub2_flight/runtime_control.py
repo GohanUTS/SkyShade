@@ -109,9 +109,10 @@ class RuntimeFlightController:
         self.ppo_policy = None
         self.q_policy = None
         self.fallback_reason = None
-        # Lead-follow params — tuned per scenario via tune_pid_for_forest()
-        self._lead_seconds = 0.5
-        self._max_lead_m   = 0.7
+        # Lead-follow params — small lead so the drone hovers right over the
+        # user (a big lead makes it sit ahead of them = "not following closely").
+        self._lead_seconds = 0.3
+        self._max_lead_m   = 0.25
 
         if self.requested_mode == "ppo":
             try:
@@ -215,6 +216,10 @@ class RuntimeFlightController:
             obs = np.clip(obs, OBS_LOW, OBS_HIGH)
 
             ppo_force = self.ppo_policy.compute_force(obs, drone_vel)
+            # A quick-trained PPO can emit large, out-of-distribution forces that
+            # wreck following even at low blend weight — clamp it so it can only
+            # ever *nudge* the reliable PID follower, never overpower it.
+            ppo_force = np.clip(ppo_force, -7.0, 7.0)
             pid_force = self.pid.compute_force(drone_pos, drone_vel, target_3d, dt)
             lateral_error = float(np.linalg.norm(delta[:2]))
 
@@ -223,9 +228,10 @@ class RuntimeFlightController:
             if lateral_error > 3.0:
                 force = pid_force * min(2.0, lateral_error / 3.0)
             else:
-                assist = float(np.clip((lateral_error - 0.10) / 0.45, 0.65, 1.0))
+                # PID is the follower; PPO adds a little motion style up close.
+                assist = float(np.clip(lateral_error / 0.30, 0.80, 1.0))
                 force = (1.0 - assist) * ppo_force + assist * pid_force
-            force = np.clip(force, -20.0, 20.0)
+            force = np.clip(force, -26.0, 26.0)
 
             dist3d = float(np.linalg.norm(drone_pos - target_3d))
             reward = 5.0 if dist3d <= HOVER_RADIUS_M else max(-5.0, -dist3d)

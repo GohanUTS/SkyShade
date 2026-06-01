@@ -406,12 +406,23 @@ def _draw_cloud(phys, x, y, z, scale, color, lifetime=0.0):
 
 
 def draw_static_clouds(phys, mode="Cloudy"):
-    """Draw the cloud bank ONCE as permanent geometry (called at sim start).
+    """Spawn soft white clouds ONCE as static visual bodies (called at sim start).
 
-    Static clouds don't churn debug lines every frame, so they neither lag the
-    sim nor flicker/"swirl" — they just sit in the sky like real clouds.
+    Each cloud is a small cluster of overlapping white spheres, so it reads as a
+    fluffy cloud rather than the old line-drawn ellipse rings.  Static = no
+    per-frame churn, so no lag and no flicker/"swirl".
     """
-    _draw_cloud_bank(phys, mode, lifetime=0.0)
+    base = [0.55, 0.60, 0.69, 1.0] if mode in ("Rainy", "Storm") else [0.88, 0.91, 0.96, 1.0]
+    # (centre x, y, height, scale) spread around the scene horizon
+    spots = [(-12, -11, 6.2, 1.7), (-4, -12, 6.6, 1.9), (5, -11.5, 6.0, 1.6),
+             (12, -10.5, 6.4, 1.7), (-9, 11.5, 6.3, 1.8), (3, 12, 6.1, 1.6),
+             (11, 11, 6.5, 1.7), (-13, 2, 6.4, 1.6), (13, -2, 6.2, 1.7)]
+    puffs = [(-0.55, 0.00, 0.62), (-0.10, 0.16, 0.80), (0.40, 0.06, 0.66),
+             (0.85, -0.04, 0.50), (0.15, -0.10, 0.58)]
+    for cx, cy, cz, s in spots:
+        for dx, dz, r in puffs:
+            _visual_body(phys, p.GEOM_SPHERE, base,
+                         [cx + dx * s, cy, cz + dz * s], radius=r * s)
 
 
 def _draw_cloud_bank(phys, mode, lifetime=0.0):
@@ -1461,30 +1472,31 @@ def make_umbrella(phys):
         parts.append({"id": body_id, "offset": np.array(offset, dtype=float),
                       "yaw": yaw, "group": group, "rgba": list(rgba)})
 
-    # The whole umbrella only appears when DEPLOYed (rain).  When stowed it is
-    # fully hidden so there is no stray "block"/stick left on the drone.
+    # The umbrella canopy is ALWAYS shown (this is a shade drone — the canopy
+    # shades the user from sun and rain).  set_umbrella_open() only tints it to
+    # signal the Sub-3 DEPLOY/STOW state; nothing is ever a stray "block".
 
     # Short pole the canopy sits on
     _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_POLE, [0, 0, 0],
                       radius=0.022, length=0.34),
-         [0.0, 0.0, 0.30], "open", _UMB_POLE)
+         [0.0, 0.0, 0.30], "always", _UMB_POLE)
 
     # Open canopy: wide disc + smaller domed cap + finial
     _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_CANOPY, [0, 0, 0],
                       radius=0.64, length=0.05),
-         [0.0, 0.0, 0.44], "open", _UMB_CANOPY)
+         [0.0, 0.0, 0.44], "canopy", _UMB_CANOPY)
     _add(_visual_body(phys, p.GEOM_CYLINDER, _UMB_CANOPY, [0, 0, 0],
                       radius=0.34, length=0.10),
-         [0.0, 0.0, 0.50], "open", _UMB_CANOPY)
+         [0.0, 0.0, 0.50], "canopy", _UMB_CANOPY)
     _add(_visual_body(phys, p.GEOM_SPHERE, _UMB_FINIAL, [0, 0, 0], radius=0.035),
-         [0.0, 0.0, 0.58], "open", _UMB_FINIAL)
+         [0.0, 0.0, 0.58], "always", _UMB_FINIAL)
 
-    # Open ribs: 8 thin boxes radiating to the rim
+    # Ribs: 8 thin boxes radiating to the rim
     for k in range(8):
         ang = 2 * math.pi * k / 8
         _add(_visual_body(phys, p.GEOM_BOX, _UMB_RIB, [0, 0, 0],
                           halfExtents=[0.34, 0.013, 0.013]),
-             [0.30 * math.cos(ang), 0.30 * math.sin(ang), 0.435], "open",
+             [0.30 * math.cos(ang), 0.30 * math.sin(ang), 0.435], "always",
              _UMB_RIB, yaw=ang)
 
     return {"parts": parts}
@@ -1502,11 +1514,14 @@ def update_umbrella(phys, umb, drone_pos):
 
 
 def set_umbrella_open(phys, umb, deployed: bool):
-    """Show the open umbrella only when deployed; hide it completely otherwise."""
+    """Umbrella is always visible; tint the canopy to signal DEPLOY vs STOW.
+
+    Deployed (rain) → bright teal canopy.  Stowed (dry) → a muted blue-grey so
+    it reads as 'not actively deployed' without ever disappearing.
+    """
+    canopy_rgba = _UMB_CANOPY if deployed else [0.46, 0.52, 0.60, 1.0]
     for prt in umb["parts"]:
-        visible = (prt["group"] == "always") or (prt["group"] == "open" and deployed)
-        rgba = list(prt["rgba"])
-        rgba[3] = rgba[3] if visible else 0.0
+        rgba = canopy_rgba if prt["group"] == "canopy" else prt["rgba"]
         p.changeVisualShape(prt["id"], -1, rgbaColor=rgba, physicsClientId=phys)
 
 
@@ -5297,7 +5312,9 @@ class TelemetryWindow:
         self.vision_window.configure(bg="#07111f")
         self.vision_window.geometry("1420x1300+10+10")
         self.vision_window.minsize(1320, 1100)
-        self.vision_window.protocol("WM_DELETE_WINDOW", self._hide_vision_window)
+        # Closing the POV window ends the run (intuitive); use the toolbar
+        # toggle if you only want to hide it.
+        self.vision_window.protocol("WM_DELETE_WINDOW", self.close)
 
         tk.Label(
             self.vision_window,
@@ -6151,7 +6168,10 @@ def run(
     # Drone and user are assembled from primitive bodies so the scene has a
     # readable physical scale while the AI/control code keeps the same inputs.
     drone_id, drone_parts = create_drone(phys, initial_user_pos[:2])
-    drone_damping = LINEAR_DAMPING if flight_controller.using_learned else RUNTIME_PID_DAMPING
+    # Following is PID-driven at runtime (PPO only nudges), and the PID is tuned
+    # for the lighter RUNTIME_PID_DAMPING — using the heavy PPO-training damping
+    # here makes the drone sluggish and lag behind the user.
+    drone_damping = RUNTIME_PID_DAMPING
     p.changeDynamics(
         drone_id, -1, mass=DRONE_MASS_KG,
         linearDamping=drone_damping, angularDamping=0.9,
@@ -6273,6 +6293,9 @@ def run(
                 break
             if telemetry.closed:
                 print("\nSimulation stopped from dashboard.")
+                break
+            if gui and not p.isConnected(phys):
+                print("\nSimulation stopped — 3D window closed.")
                 break
             weather_now = weather_controller.update(t_wall)
 
@@ -6491,7 +6514,7 @@ def run(
 
             # Keep umbrella attached to drone
             d_pos2, _ = p.getBasePositionAndOrientation(drone_id, physicsClientId=phys)
-            update_drone_parts(phys, drone_parts, d_pos2, t_wall * 35.0)
+            update_drone_parts(phys, drone_parts, d_pos2, 0.0)   # no rotor spin (was distracting)
             update_umbrella(phys, umbrella_rig,
                             [d_pos2[0], d_pos2[1], d_pos2[2] + 0.30])
 
@@ -6534,14 +6557,9 @@ def run(
                     _in_collision = False
                     _in_near = False
 
-            if gui and WEATHER_VISUALS and tick % WEATHER_VIS_EVERY == 0:
-                focus_xy = (
-                    (np.array(d_pos2[:2], dtype=float) + user_pos[:2]) * 0.5
-                )
-                draw_weather_visuals(
-                    phys, weather_now, weather_visual_rng, t_wall,
-                    focus_xy=focus_xy,
-                )
+            # 3D in-scene rain was removed — hundreds of addUserDebugLine calls
+            # per refresh lagged the sim badly.  Clouds are static (drawn once)
+            # and rain still shows on the drone POV via the cheap OpenCV overlay.
 
             # ── Telemetry update (every 10 ticks) ─────────────────────────────
             if tick % 10 == 0:
