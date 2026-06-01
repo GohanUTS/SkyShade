@@ -26,6 +26,27 @@ Once all five model files exist, the footer badges turn `●` and the **Launch**
 
 ---
 
+## TensorBoard
+
+Every reinforcement-learning trainer (Sub-1 gimbal SAC, Sub-2 flight PPO, Sub-4 nav SAC) logs to **TensorBoard** while it runs. Launch the dashboard from the repo root:
+
+```bash
+tensorboard --logdir runs
+# then open http://localhost:6006
+```
+
+Each run appears as its own series (`sub2_flight_PPO_1`, `sub4_nav_SAC_1`, …). Under **Scalars** you get the Stable-Baselines3 defaults (`rollout/ep_rew_mean`, `train/value_loss`, `train/entropy_loss`, …) plus a few domain metrics we record ourselves (`flight/mean_reward`, `navigation/mean_reward`, `perception/lock_rate`).
+
+<p align="center">
+  <img src="images/flight_ppo_metrics.png" alt="TensorBoard PPO diagnostics" width="720">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> The Sub-2 PPO run as logged to TensorBoard. <b>Explained variance</b> climbing toward 1 and <b>value loss</b> settling are the signs of a healthy value function; the small, steady <b>clip fraction</b> and slowly-shrinking <b>entropy</b> mean PPO is improving without its policy collapsing.</em></sub></p>
+
+> Logs are written to `runs/` (git-ignored). Disable with `SKYSHADE_TB=0` or redirect with `SKYSHADE_TB_DIR=/some/path`.
+
+---
+
 ## Sub-1: Perception — calibration check
 
 Sub-1 uses a deterministic HSV colour tracker. There is no model to train. The calibration tab verifies the algorithm works correctly in a synthetic 3D scene before you commit to the full sim.
@@ -95,6 +116,12 @@ All 4 share the same policy network. The critic updates on the combined experien
    - Bottom-right indicator: `↑ improving` or `→ flat`
    - Title bar: `Run 2 · 38% · ~2m left · 1924 steps/s`
 6. **Initial dip is normal:** When fine-tuning an existing model, reward temporarily drops before rising — this is the optimizer adjusting weights before settling on a better configuration
+
+<p align="center">
+  <img src="images/flight_ppo_reward.png" alt="PPO hover reward curve" width="640">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> A complete PPO run: mean episode reward rises from ≈ −1350 to <b>+408</b> over ~51 k steps. The shaded bands are the three curriculum stages (calm → gusts → storm + walking) — reward keeps climbing even as the task gets harder.</em></sub></p>
 
 ### Fine-tune vs Retrain from Scratch
 
@@ -244,6 +271,14 @@ SAC (Soft Actor-Critic) was chosen over PPO for obstacle navigation because:
 4. Watch the teal reward curve — SAC typically converges faster than PPO because it reuses all past experience
 5. Status bar: `SAC training from scratch… ~3 min on CPU · off-policy replay buffer · auto-entropy exploration`
 
+<p align="center">
+  <img src="images/nav_sac_reward.png" alt="SAC nav reward curve on the city layout" width="620">
+</p>
+
+<p align="center"><sub><em><b>Figure 3.</b> SAC nav reward on the <b>City</b> obstacle layout — reward climbs from ≈ −176 toward −90 in the first ~12 k steps as the drone stops hitting pillars. Because Auto-Train passes the launcher's selected scenario through to the trainer, the policy practises on the same kind of layout it will fly in.</em></sub></p>
+
+> **Scenario-aware:** the nav agent trains on a layout that matches the chosen scenario (`scenario_obstacles()` maps City → pillar grid, Park → scattered trees, Forest → dense rows, Urban Trail → a central pinch). See [Sub-4: Navigation and Safety](Sub-4-Navigation-Safety#scenario-aware-training).
+
 ### ⚠ PPO/SAC incompatibility
 
 If you have an old `ppo_nav_v1.zip` file trained with the previous PPO worker, the SAC loader will detect the mismatch automatically:
@@ -288,3 +323,27 @@ python sub4_nav/solve_mdp.py --output models/policy_table_v1.npy  # MDP only
 | Sub-3 Weather SVM | CV accuracy ≥ 90%; umbrella deploys in rain, stows in clear | `models/svm_v1.pkl` |
 | Sub-4 Battery MDP | Policy table solved; CRITICAL → LAND, LOW/MED/HIGH → RTH | `models/policy_table_v1.npy` |
 | Sub-4 Nav SAC | Evaluate shows ≥ 3/5 episodes reaching the goal | `models/ppo_nav_v1.zip` (SAC weights, legacy filename) |
+
+---
+
+## Validation tests
+
+Each subsystem ships a standalone validation script (no `pytest` needed — they print a PASS/FAIL summary). Run them from the repo root:
+
+```bash
+python sub1_perception/test_perception.py     # tracker accuracy
+python sub2_flight/test_flight.py             # hover reward + success
+python sub3_env/test_env_decision.py          # SVM accuracy + stability
+python sub4_nav/test_nav_safety.py            # battery-safety invariants
+```
+
+Latest results on this machine:
+
+| Subsystem | What it checks | Target | Result |
+|---|---|---|---|
+| Sub-1 Perception | Tracking continuity / position MAE | > 70 % / < 0.15 m | **100 % / 0.081 m** ✓ |
+| Sub-2 Flight | Mean reward / hover successes (3 wind cases) | > 150 / ≥ 9 of 10 | **+2666…+2705 / 10 of 10** ✓ |
+| Sub-3 Weather | 10-fold CV accuracy / decision flip rate | ≥ 90 % / < 10 % | **96.0 % / 0.0 %** ✓ |
+| Sub-4 Nav Safety | Scripted battery/obstacle safety scenarios | 50 of 50 | **50 of 50** ✓ |
+
+Per-subsystem details and sample output are on each subsystem page under **Tests**.

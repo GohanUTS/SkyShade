@@ -102,6 +102,26 @@ The **Drone POV & AI Evidence** window shows 5 real-time graphs during the simul
 
 ---
 
+## Automated test suite
+
+Beyond the live GUI checks, each subsystem has a scripted validation test that prints a PASS/FAIL summary:
+
+```bash
+python sub1_perception/test_perception.py
+python sub2_flight/test_flight.py
+python sub3_env/test_env_decision.py
+python sub4_nav/test_nav_safety.py
+```
+
+| Subsystem | Check | Target | Latest result |
+|---|---|---|---|
+| Sub-1 Perception | continuity / position MAE | > 70 % / < 0.15 m | **100 % / 0.081 m** ✓ |
+| Sub-2 Flight | mean reward / hover successes | > 150 / ≥ 9 of 10 | **+2666…+2705 / 10 of 10** ✓ |
+| Sub-3 Weather | 10-fold CV / flip rate | ≥ 90 % / < 10 % | **96.0 % / 0.0 %** ✓ |
+| Sub-4 Nav Safety | scripted safety scenarios | 50 of 50 | **50 of 50** ✓ |
+
+---
+
 ## Per-subsystem validation
 
 ### Sub-1 Perception
@@ -121,17 +141,37 @@ After training, click **Evaluate Model** — this runs 5 test episodes and draws
 
 > **Note:** The PPO model must be trained with `LINEAR_DAMPING = 2.5` (the default). Changing this parameter after training invalidates the model and causes ~3% hover accuracy. Retrain from scratch if damping is changed.
 
+<p align="center">
+  <img src="images/flight_ppo_reward.png" alt="PPO hover reward curve" width="600">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> Sub-2 PPO training reward (logged via TensorBoard) climbing from ≈ −1350 to +408 across the three wind/curriculum stages.</em></sub></p>
+
 ### Sub-3 Weather / SVM
 
 Open the **Sub-3 Weather** tab.
 
 After training, the confusion matrix and CV accuracy are shown. ≥ 85% CV accuracy means the SVM is classifying sensor readings correctly.
 
+<p align="center">
+  <img src="images/sub3_confusion_matrix.png" alt="SVM confusion matrix" width="440">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> Sub-3 SVM confusion matrix — a strong correct-prediction diagonal with zero false-deploys (the umbrella never opens in clear weather). 10-fold CV accuracy 96.0 %.</em></sub></p>
+
 ### Sub-4 Navigation / Safety
 
 Open the **Sub-4 Safety** tab.
 
 **MDP:** The convergence curve should flatten below 1×10⁻⁶ delta. The policy heatmap shows CONTINUE (green) in safe states, RTH (yellow) near low-battery, LAND_NOW (red) at critical.
+
+<p align="center">
+  <img src="images/convergence_curve.png" alt="MDP convergence curve" width="480">
+  &nbsp;&nbsp;
+  <img src="images/nav_sac_reward.png" alt="SAC nav reward curve" width="480">
+</p>
+
+<p align="center"><sub><em><b>Figure 3.</b> Left — the battery-safety MDP converges (max Bellman Δ below 1e-6) in ~18 value-iteration sweeps. Right — the SAC nav agent's reward rising on the City obstacle layout.</em></sub></p>
 
 **Nav SAC:** Click **Evaluate Navigation** — the drone attempts 5 obstacle-room episodes and draws the path. Look for paths that reach the goal marker without touching obstacles.
 

@@ -43,6 +43,18 @@ RuntimeFlightController.compute_force():
 
 ---
 
+## Obstacle avoidance
+
+On top of the follow controller, a lightweight **repulsive force** keeps the drone off trees, buildings and crowd pedestrians. Each tick it sums an outward push from any obstacle whose clearance is below `AVOIDANCE_RADIUS`, weighted by how close it is, and adds that to the flight force:
+
+<p align="center">
+  <img src="images/code_sub2_avoidance.png" alt="obstacle_avoidance_force source" width="700">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> <code>obstacle_avoidance_force()</code> in <code>runtime_control.py</code>. Only the six nearest obstacles are considered; the push grows quadratically (<code>proximity²</code>) as the drone closes in and is capped at <code>max_force</code> so it never overpowers the follow controller. In the <b>Building District</b> this is what steers the drone around buildings — and the main loop logs a <i>near-miss / collision</i> alert whenever clearance gets tight.</em></sub></p>
+
+---
+
 ## PPO training environment — `PPOHoverEnv`
 
 File: `sub2_flight/env/ppo_hover_env.py`
@@ -110,6 +122,20 @@ Each training session draws a **new coloured line** — Run 1 (blue), Run 2 (gre
 
 An **initial dip** after warm-start is normal — the optimizer temporarily disrupts existing weights before settling on a better policy. The chart shows an annotated arrow explaining this.
 
+<p align="center">
+  <img src="images/flight_ppo_reward.png" alt="PPO hover reward curve" width="660">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> A real PPO training run (logged to TensorBoard). Mean episode reward climbs from about −1350 to <b>+408</b> over ~51 k steps. The shaded bands mark the curriculum: calm air → wind gusts → storm + walking user — the agent keeps improving as conditions get harder.</em></sub></p>
+
+<p align="center">
+  <img src="images/flight_ppo_metrics.png" alt="PPO learning diagnostics" width="720">
+</p>
+
+<p align="center"><sub><em><b>Figure 3.</b> PPO learning diagnostics for the same run. <b>Explained variance</b> rising toward 1 means the value function is predicting returns well; <b>value loss</b> falls as it settles; a small, stable <b>clip fraction</b> and gently shrinking <b>entropy</b> show healthy, non-collapsing exploration.</em></sub></p>
+
+> These curves come straight from TensorBoard. Run `tensorboard --logdir runs` while (or after) training to watch them live — see [Training the Models](Training-the-Models#tensorboard).
+
 ### Buttons
 
 - **Fine-tune (Run N)** — warm-starts from existing model at lower LR (`1e-4`), adds improvement
@@ -151,5 +177,31 @@ Click **Evaluate Model** in the hub. This runs 5 deterministic episodes on stage
 | `sub2_flight/training_worker.py` | Background training thread (used by hub) |
 | `sub2_flight/eval_worker.py` | 5-episode evaluation worker |
 | `sub2_flight/policy.py` | `PPOFlightPolicy`, `FlightPolicy` (Q), `PIDFlightPolicy` |
-| `sub2_flight/runtime_control.py` | `RuntimeFlightController` (PPO → Q → PID priority) |
+| `sub2_flight/runtime_control.py` | `RuntimeFlightController` (PPO → Q → PID priority) + `obstacle_avoidance_force` |
 | `models/ppo_flight_v1.zip` | Trained PPO model (SB3 format) |
+
+---
+
+## Tests
+
+Run the flight validation test:
+
+```bash
+python sub2_flight/test_flight.py
+```
+
+It evaluates the controllers over 10 episodes in each of three conditions — stationary/no-wind, stationary/gusty, and walking/gusty:
+
+| Controller | Scenario | Mean reward (target > 150) | Hover successes (≥ 9/10) |
+|---|---|---|---|
+| PID baseline | Stationary / no wind | **+2705** ✓ | **10 / 10** ✓ |
+| PID baseline | Stationary / gusty | **+2688** ✓ | **10 / 10** ✓ |
+| PID baseline | Walking / gusty | **+2666** ✓ | **10 / 10** ✓ |
+| Q-learning (greedy) | Stationary / no wind | +1252 ✓ | 10 / 10 coverage ✓ |
+
+```text
+=== PID hover controller ===
+Scenario: Walking / gusty wind
+  Mean reward      : +2666.2  (target > 150.0)  ✓
+  Hover successes  : 10/10  (target >= 9)  ✓
+```

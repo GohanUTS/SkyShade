@@ -2,29 +2,11 @@
 
 ## System diagram
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    SkyShade Launcher                        │
-│  Training Grounds hub  ──►  train Sub-2 PPO + Sub-4 MDP    │
-│  before launching the integrated simulation                 │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ launch
-                            ▼
-         Simulated sensors (camera, IMU, env. sensors)
-                    │
-     ───────────────┼──────────────────────────────
-     │              │              │               │
-  [SUB-1]       [SUB-2]       [SUB-3]         [SUB-4]
- Perception     Flight        Env.            Nav +
- HSV tracker    PPO policy    Decision        Safety
- + distance     + PID         SVM + PCA       MDP +
-   estimator    fallback                      PPO nav
-     │              │              │               │
-     └──────┬────── ┘              │               │
-            │                     │               │
-     PyBullet Flight          Umbrella        Override
-     Controller               Servo           / RTH
-```
+<p align="center">
+  <img src="images/architecture.png" alt="SkyShade system architecture diagram" width="860">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> End-to-end data flow. The three <b>sensor inputs</b> (camera, weather, battery/pose) feed the four <b>AI subsystems</b>. Sub-1 hands a tracked target to Sub-2; Sub-4 can override Sub-2 for battery safety; Sub-3 drives the umbrella. All commands act on the <b>PyBullet world</b>, whose rendered camera view and state feed straight back to the sensors (dashed lines) — closing the loop every control tick.</em></sub></p>
 
 ---
 
@@ -36,7 +18,9 @@
 | Sub-2 Flight | PPO → PID fallback | `models/ppo_flight_v1.zip` | 3D hover arena (~8 min) |
 | Sub-3 Environment | SVM | `models/svm_v1.pkl` | Pre-trained |
 | Sub-4 Battery Safety | MDP value iteration | `models/policy_table_v1.npy` | <1 sec |
-| Sub-4 Nav (obstacle) | PPO | `models/ppo_nav_v1.zip` | 3D obstacle room (~3 min) |
+| Sub-4 Nav (obstacle) | **SAC** (off-policy) | `models/ppo_nav_v1.zip` | 3D obstacle room (~1–3 min) |
+
+> **Note** — the nav model file keeps the legacy name `ppo_nav_v1.zip` for backward compatibility, but it now contains **SAC** weights, not PPO. Auto-Train can also train it on the **selected scenario's obstacle layout** (city / park / forest / trail) so the policy is tuned to the world it will fly in.
 
 ---
 

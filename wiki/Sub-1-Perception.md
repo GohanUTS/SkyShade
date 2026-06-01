@@ -17,6 +17,12 @@ Identify the user in the simulated downward-facing camera feed and publish their
 7. If confidence falls below threshold, the last known position is held for up to 20 frames (occlusion holdout), and the gimbal sweeps a search circle at `GIMBAL_SEARCH_RADIUS`
 8. Position and confidence are published to `/skyshade/user_position` and `/skyshade/tracking_confidence`
 
+<p align="center">
+  <img src="images/code_sub1_hsv.png" alt="HSV marker detection source" width="720">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> The core of the tracker (<code>tracker.py</code>). The RGB frame is converted to HSV, two red bands are thresholded and OR-ed (red wraps around the 0°/180° hue boundary), a morphological open removes speckle, and the <b>largest contour above <code>MIN_CONTOUR_AREA</code></b> gives the marker centroid <code>(cx, cy)</code> and apparent width used for distance.</em></sub></p>
+
 ---
 
 ## Key parameters
@@ -152,3 +158,26 @@ These fire immediately on threshold crossing, not on the 5-second logging interv
 | `sub1_perception/training.py` | Calibration room logic (used by Training Grounds hub) |
 | `sub1_perception/training_env.py` | PyBullet calibration room environment |
 | `sub1_perception/test_perception.py` | Unit test: tracker accuracy on synthetic frames |
+
+---
+
+## Tests
+
+Run the perception validation test:
+
+```bash
+python sub1_perception/test_perception.py
+```
+
+It renders synthetic frames with a red marker at known offsets and checks two things:
+
+| Check | Target | Latest result |
+|---|---|---|
+| Tracking continuity (frames above `CONFIDENCE_THRESH`) | > 70 % | **100 %** ✓ |
+| Position MAE vs. ground truth | < 0.15 m | **0.081 m** ✓ |
+
+```text
+Tracking continuity : 100.00%  (target > 70%)
+Position MAE        : 0.0810 m  (target < 0.15 m)
+Sub-1 PASSED all checks.
+```

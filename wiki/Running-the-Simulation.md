@@ -62,7 +62,22 @@ Dense tree canopy with a 18 m dirt trail. The user walks at 0.42 m/s; the drone 
 **Key challenge:** tracker lock drops when the canopy closes overhead. The red marker disk (30 cm radius) is deliberately large to compensate.
 
 ### Building District
-City plaza surrounded by tall buildings, a ring road with parked cars and buses, park corners with trees, and pedestrians in non-red clothing. The flight zone is the clear plaza centre.
+An enlarged city: a clear central plaza ringed by tall buildings (11–17 m out), a ring road with parked cars and buses, grassy corners with trees, and pedestrians in non-red clothing.
+
+Instead of staying boxed in the plaza, the user now **walks a footpath tour** — out of the centre, right up to one building, holds, then back and on to the next building. The drone follows, so it actually approaches buildings, where two things happen:
+
+| Behaviour | Detail |
+|---|---|
+| **Avoidance steers it around** | The repulsive `obstacle_avoidance_force` pushes the drone off the building wall — it keeps tracking the user but bends its path around the obstacle. |
+| **Near-miss / collision alerts** | When clearance gets tight the loop logs a yellow `[Near miss]` (and a red `[Collision]` if it ever actually touches); a floating `NEAR BUILDING` / `COLLISION` label appears over the drone in the 3D view, and the counts go into the post-run report. |
+
+<p align="center">
+  <img src="images/code_proximity.png" alt="building near-miss/collision detection source" width="700">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> The proximity logic in <code>run_sim.py</code> (Building District only). Each tick it computes the drone's clearance to the nearest building; below <code>NEAR_MISS_CLEARANCE</code> it warns, and only if the drone is actually inside the wall (avoidance failed) does it count a collision. The debounce flags mean one alert per approach, not per frame.</em></sub></p>
+
+This makes the city a good place to *watch how the drone handles buildings* — it should weave around them, with the report reading "flew close, avoided".
 
 ### Urban Trail *(new)*
 A 26 m paved trail (loops) with:

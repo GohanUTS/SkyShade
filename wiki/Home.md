@@ -5,6 +5,12 @@ Welcome to the SkyShade project wiki. SkyShade is a fully simulated autonomous d
 **Course:** AI for Robotics — UTS, May 2026  
 **Team:** Gohan Idrisoglu (Lead) · Dinesh Saravanan · Aaron · Saaranj
 
+<p align="center">
+  <img src="images/architecture.png" alt="SkyShade system architecture" width="820">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> The whole system at a glance — four AI subsystems (perception, flight, weather, navigation/safety) wrapped around a PyBullet physics world. See <a href="Architecture">Architecture</a> for the full walkthrough.</em></sub></p>
+
 ---
 
 ## Pages
@@ -47,11 +53,14 @@ Click **🚀 Auto-Train All** on the launcher. The Training Grounds hub opens an
 Step 1/4  Sub-2 Flight PPO   ~60 sec
 Step 2/4  Sub-3 Weather SVM   ~3 sec
 Step 3/4  Sub-4 Battery MDP   ~1 sec
-Step 4/4  Sub-4 Nav SAC       ~50 sec
+Step 4/4  Sub-4 Nav SAC       ~50 sec   (trains on the selected scenario's layout)
 Total ≈ 2 min 15 sec
 ```
 
 When complete, the banner turns green: `✅ Training complete! → Select scenario and Launch.`
+
+> **Scenario-aware nav** — whichever scenario is selected in the launcher (Park / Building District / …) is passed through to Auto-Train, so **Sub-4 Nav SAC** learns to dodge a layout that matches that world.
+> **Note:** Auto-Train covers Sub-2, Sub-3 and Sub-4. Sub-1 Perception is a deterministic HSV tracker with an optional gimbal-SAC trainer, and is not part of the Auto-Train sequence.
 
 ### Or train individually
 

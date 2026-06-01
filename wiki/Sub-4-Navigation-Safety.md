@@ -57,6 +57,12 @@ Value iteration with γ = 0.95, convergence threshold Δ < 1e-6. Converges in ~1
 python sub4_nav/solve_mdp.py --gamma 0.95 --output models/policy_table_v1.npy
 ```
 
+<p align="center">
+  <img src="images/convergence_curve.png" alt="MDP value-iteration convergence curve" width="540">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> Battery-safety MDP convergence. The maximum Bellman update Δ drops below the 1e-6 threshold after ~18 sweeps — value iteration has converged and the policy table is stable. The y-axis is log-scaled because Δ shrinks geometrically.</em></sub></p>
+
 ---
 
 ## Obstacle Navigation — SAC policy
@@ -124,6 +130,22 @@ SAC("MlpPolicy", env,
 
 **Warm-start fine-tuning:** `learning_rate = 5e-5` (conservative refinement of existing weights).
 
+<p align="center">
+  <img src="images/nav_sac_reward.png" alt="SAC navigation reward curve on the city layout" width="640">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> SAC learning curve when training on the <b>City (Building District)</b> obstacle layout. Mean episode reward climbs from about −176 toward −90 within the first ~12 k steps as the agent stops crashing into pillars and starts making progress toward the goal. A full run (≈150 k steps) carries it well into positive reward.</em></sub></p>
+
+### Scenario-aware training
+
+Auto-Train passes the launcher's **selected scenario** into the nav trainer, so the SAC policy practises on an obstacle layout that *matches the world it will fly in*. `scenario_obstacles()` maps each scenario into the 10 × 8 m nav room:
+
+<p align="center">
+  <img src="images/code_sub4_scenario.png" alt="scenario_obstacles source" width="720">
+</p>
+
+<p align="center"><sub><em><b>Figure 3.</b> <code>scenario_obstacles()</code> in <code>obstacle_env.py</code>. The City becomes a dense 3 × 3 grid of pillars to weave through, the Park a few scattered trees, the Forest dense rows of trunks, and the Urban Trail a central pinch (the bridge) plus bollards. An unknown scenario falls back to the default pillar maze.</em></sub></p>
+
 ---
 
 ## Training from the Training Grounds hub
@@ -150,8 +172,8 @@ Two separate controls:
 # Battery safety MDP
 python sub4_nav/solve_mdp.py --output models/policy_table_v1.npy
 
-# Obstacle navigation PPO  
-python -m sub4_nav.train_nav  # (or use the Training Grounds hub)
+# Obstacle navigation SAC — easiest from the Training Grounds hub
+# (Auto-Train trains it on the selected scenario's layout)
 ```
 
 ### Evaluating before launch
@@ -177,3 +199,25 @@ Click **Evaluate Model** in the Sub-4 tab. Runs 5 deterministic episodes and:
 | `sub4_nav/test_nav_safety.py` | Battery-safety unit tests |
 | `models/policy_table_v1.npy` | Solved MDP battery-safety policy |
 | `models/ppo_nav_v1.zip` | Trained **SAC** obstacle navigation model (filename is legacy PPO name) |
+
+---
+
+## Tests
+
+Run the battery-safety validation test:
+
+```bash
+python sub4_nav/test_nav_safety.py
+```
+
+It runs **50 scripted battery/distance scenarios** and asserts the safety invariants:
+
+| Check | Target | Latest result |
+|---|---|---|
+| `CONTINUE` never issued while battery is CRITICAL (monotone safety) | all 50 | **50 / 50** ✓ |
+| `RTH` fires within one decision tick of a low-battery injection | yes | ✓ |
+
+```text
+Results: 50/50 passed
+Sub-4 PASSED all 50 scripted scenarios.
+```

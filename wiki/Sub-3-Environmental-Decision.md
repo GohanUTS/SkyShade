@@ -37,6 +37,12 @@ The `prev_action` features give the model memory — it considers whether the um
 
 PCA to 3 components is used for visualisation only (`pca_3d.png`) — the SVM trains and infers on the full 9-D space.
 
+<p align="center">
+  <img src="images/sub3_pca_3d.png" alt="3-D PCA of the weather feature space" width="520">
+</p>
+
+<p align="center"><sub><em><b>Figure 1.</b> The 9-D weather features projected to their first three principal components (visualisation only). The two classes — <b>stow</b> (clear) and <b>deploy</b> (rain) — form well-separated clusters, which is exactly why a simple RBF-SVM reaches 96 % accuracy.</em></sub></p>
+
 ---
 
 ## Classifier configuration
@@ -67,6 +73,20 @@ Status bar after training:
 ```
 
 A 2×2 confusion matrix appears — green cells (TP/TN) are correct, red cells (FP/FN) are errors. A good model has 0 false positives and ≤ 2 false negatives.
+
+<p align="center">
+  <img src="images/sub3_confusion_matrix.png" alt="SVM confusion matrix" width="460">
+</p>
+
+<p align="center"><sub><em><b>Figure 2.</b> Validation confusion matrix. The strong green diagonal (correct STOW / correct DEPLOY) with <b>zero false-deploys</b> in clear weather is the safety property we care about most — the umbrella never opens when it shouldn't.</em></sub></p>
+
+The SVM itself is a short scikit-learn pipeline (standardise → RBF-SVM) scored with 10-fold cross-validation:
+
+<p align="center">
+  <img src="images/code_sub3_svm.png" alt="SVM training source" width="640">
+</p>
+
+<p align="center"><sub><em><b>Figure 3.</b> The training core (<code>training_worker.py</code>): a <code>StandardScaler → SVC(rbf)</code> pipeline, 10-fold stratified cross-validation for an honest accuracy estimate, then a final fit on all data plus the confusion matrix.</em></sub></p>
 
 ### Live weather demo (no button press needed)
 
@@ -161,3 +181,27 @@ The umbrella canopy changes colour in the PyBullet view and the **Umbrella decis
 | `models/svm_v1.pkl` | Trained SVM pipeline |
 | `confusion_matrix.png` | Per-class accuracy on training set |
 | `pca_3d.png` | 3-D PCA of the 9-D weather feature space |
+
+---
+
+## Tests
+
+Run the environmental-decision validation test:
+
+```bash
+python sub3_env/test_env_decision.py
+```
+
+It re-checks cross-validation accuracy and then replays a synthetic 5-minute weather trajectory (clear → cloudy → rainy → clear) to confirm the umbrella doesn't flicker:
+
+| Check | Target | Latest result |
+|---|---|---|
+| 10-fold CV accuracy | ≥ 90 % | **96.0 %** ✓ |
+| Trajectory flip rate (how often the decision flips) | < 10 % | **0.0 %** ✓ |
+
+```text
+=== Sub-3 Environmental Decision — Tests ===
+10-fold CV accuracy : 0.9600  (target >= 0.9)  ✓
+Trajectory flip rate: 0.00%  (target < 10%)  ✓
+Sub-3 PASSED
+```
