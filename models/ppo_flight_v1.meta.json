@@ -2,9 +2,9 @@
   "subsystem": "Sub-2 Flight",
   "algorithm": "PPO",
   "model": "ppo_flight_v1.zip",
-  "steps_done": 51200,
+  "steps_done": 8822784,
   "efficiency_pct": 100,
-  "warm_started": false,
-  "trained_at": 1780302872.7192638,
+  "warm_started": true,
+  "trained_at": 1780446206.5043602,
   "parallel_envs": 4
 }

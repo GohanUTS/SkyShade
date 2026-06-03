@@ -73,7 +73,7 @@ LOW_BATTERY_DEMO_START = 10.0
 LOW_BATTERY_DEMO_DRAIN_RATE = 1.0
 RUNTIME_PID_DAMPING = 0.5
 WIND_FORCE_SCALE    = 0.35   # N per m/s of weather wind pushed on the drone
-USER_WALK_SPEED    = 0.12   # rad/s for figure-8 (slow stroll so the drone keeps up)
+USER_WALK_SPEED    = 0.07   # rad/s for figure-8 (slow stroll so the drone keeps up)
 HOVER_RADIUS       = 0.5    # m
 WEATHER_MIN_SECONDS = 8.0
 WEATHER_MAX_SECONDS = 20.0
@@ -86,26 +86,111 @@ DEBUG_WEATHER_LINES = False
 # old integrated-GPU lag is gone.  Still disable with SKYSHADE_WEATHER_VIS=0.
 WEATHER_VISUALS = os.environ.get("SKYSHADE_WEATHER_VIS", "1") != "0"
 WEATHER_VIS_EVERY = 16   # redraw rain every N ticks (clouds are static, drawn once)
-SCENARIO_PARK = "park"
-SCENARIO_FOREST = "forest"
+SCENARIO_PARK      = "park"
+SCENARIO_FOREST    = "forest"
 SCENARIO_BUILDINGS = "buildings"
-SCENARIO_TRAIL = "trail"
-SCENARIO_CHOICES = (SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS, SCENARIO_TRAIL)
+SCENARIO_TRAIL     = "trail"
+SCENARIO_NIGHT     = "night"
+SCENARIO_ROOFTOP   = "rooftop"
+SCENARIO_BEACH     = "beach"
+SCENARIO_PARKING   = "parking"
+SCENARIO_VINEYARD  = "vineyard"
+SCENARIO_CHOICES = (
+    SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS,
+    SCENARIO_TRAIL, SCENARIO_NIGHT, SCENARIO_ROOFTOP,
+    SCENARIO_BEACH, SCENARIO_PARKING, SCENARIO_VINEYARD,
+)
 SCENARIO_LABELS = {
     SCENARIO_PARK:      "Park",
     SCENARIO_FOREST:    "Forest Trail",
     SCENARIO_BUILDINGS: "Building District",
     SCENARIO_TRAIL:     "Urban Trail",
+    SCENARIO_NIGHT:     "Night Park",
+    SCENARIO_ROOFTOP:   "Rooftop",
+    SCENARIO_BEACH:     "Coastal Beach",
+    SCENARIO_PARKING:   "Parking Lot",
+    SCENARIO_VINEYARD:  "Vineyard",
 }
 SCENARIO_DESCRIPTIONS = {
     SCENARIO_PARK:      "Open park loop with light obstacles and figure-8 walking.",
     SCENARIO_FOREST:    "Long wooded trail with tree avoidance and path reset.",
     SCENARIO_BUILDINGS: "City plaza with buildings, roads, vehicles, and pedestrians.",
     SCENARIO_TRAIL:     "Urban trail: bridge/underpass to fly over, crowd pedestrians as distractors.",
+    SCENARIO_NIGHT:     "Evening park with streetlamps; tests tracker in low-light and the shadow HSV band.",
+    SCENARIO_ROOFTOP:   "Confined rooftop platform with parapet walls and strong wind; stresses hover stability.",
+    SCENARIO_BEACH:     "Open sandy beach with a strong lateral sea-breeze; tests crosswind hover and open-sky tracking.",
+    SCENARIO_PARKING:   "Car park with rows of parked vehicles; the human weaves between them while the drone navigates box obstacles.",
+    SCENARIO_VINEYARD:  "Vineyard with rows of vine trellises; person walks between rows, creating regular partial occlusion and tight nav corridors.",
 }
 
+# ── Vineyard scenario constants ───────────────────────────────────────────────
+VINEYARD_WALK_SPEED = 0.14       # m/s — walk along vineyard rows
+VINEYARD_ROW_LENGTH = 18.0       # metres per row (x-axis)
+VINEYARD_START_X    = -9.0
+VINEYARD_ROW_Y      = [0.0, 3.0, -3.0]   # y-position of each row centre
+# Vine trellis posts: (x, radius) per post; three rows share the same x-grid
+VINEYARD_POST_XS    = [-8.0, -5.5, -3.0, -0.5,  2.0,  4.5,  7.0,  8.5]
+VINEYARD_POST_R     = 0.10       # thin post radius
+VINEYARD_WIRE_H     = 1.8        # canopy wire height (visual only)
+
+# ── Night Park scenario constants ────────────────────────────────────────────
+NIGHT_WALK_SPEED  = 0.05         # rad/s figure-8 — slow evening stroll (slower than park)
+NIGHT_LAMP_POSITIONS = [         # (x, y) of streetlamp bases
+    (-4.5, -3.5), (-4.5,  3.5),
+    ( 0.0, -5.0), ( 0.0,  5.0),
+    ( 4.5, -3.5), ( 4.5,  3.5),
+]
+
+# ── Rooftop scenario constants ────────────────────────────────────────────────
+ROOFTOP_WALK_SPEED  = 0.035      # rad/s — slow roof-top circuit
+ROOFTOP_WALK_RX     = 4.0        # x half-axis of the walking ellipse
+ROOFTOP_WALK_RY     = 2.8        # y half-axis
+ROOFTOP_PLATFORM_X  = 10.0       # half-width of the rooftop slab
+ROOFTOP_PLATFORM_Y  =  7.0       # half-depth
+ROOFTOP_WALL_H      =  0.65      # parapet wall height (m)
+ROOFTOP_WIND_MIN    =  3.0       # m/s minimum wind on roof
+ROOFTOP_WIND_MAX    =  8.0       # m/s maximum wind on roof
+
+# ── Coastal Beach scenario constants ─────────────────────────────────────────
+BEACH_WALK_SPEED    = 0.14       # m/s — relaxed beach stroll
+BEACH_LENGTH        = 22.0       # metres end-to-end before looping
+BEACH_START_X       = -11.0
+BEACH_SIDE_WIND     =  5.0       # m/s steady lateral sea-breeze (y-axis)
+BEACH_ROCK_POSITIONS = [         # (x, y) of scattered beach rocks
+    (-7.0,  2.2), (-3.0, -2.5), (1.5,  2.8),
+    ( 5.0, -1.8), ( 8.5,  2.0),
+]
+
+# ── Parking Lot scenario constants ────────────────────────────────────────────
+PARKING_WALK_SPEED  = 0.16       # m/s — brisk walk through the car park
+# Cars: (x, y, half_length, half_width) — laid out in two facing rows
+# The human's serpentine path weaves between the rows, giving the drone a
+# tight lane to follow and the nav SAC box obstacles to avoid.
+PARKING_CARS = [
+    # Row A (y ≈ +3) — facing East
+    (-8.5,  3.0, 2.2, 0.9), (-4.0,  3.0, 2.2, 0.9),
+    ( 0.5,  3.0, 2.2, 0.9), ( 5.0,  3.0, 2.2, 0.9),
+    # Row B (y ≈ -3) — facing East (facing row A)
+    (-8.5, -3.0, 2.2, 0.9), (-4.0, -3.0, 2.2, 0.9),
+    ( 0.5, -3.0, 2.2, 0.9), ( 5.0, -3.0, 2.2, 0.9),
+]
+# Waypoints for the serpentine path through the parking lot
+PARKING_WAYPOINTS = [
+    (-10.0,  0.0),   # entrance
+    (-7.0,   0.0),   # aisle between first car pair
+    (-7.0,   5.0),   # turn up past row A
+    (-2.5,   5.0),   # along the top
+    (-2.5,  -5.0),   # down between rows
+    ( 2.0,  -5.0),   # along the bottom
+    ( 2.0,   5.0),   # up past the gap
+    ( 7.0,   5.0),   # toward exit
+    ( 7.0,   0.0),   # exit aisle
+    ( 10.0,  0.0),   # exit
+]
+PARKING_WALK_CYCLE_T = 90.0     # seconds for one full serpentine pass
+
 # ── Urban Trail scenario constants ────────────────────────────────────────────
-TRAIL_WALK_SPEED       = 0.26    # m/s — slow walk along the trail
+TRAIL_WALK_SPEED       = 0.15    # m/s — slow walk along the trail
 TRAIL_LENGTH           = 26.0    # metres end to end before looping
 TRAIL_START_X          = -13.0
 TRAIL_END_X            = 13.0
@@ -182,7 +267,7 @@ def _append_run_history(entry, max_kept=20):
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
-FOREST_WALK_SPEED = 0.20   # slow walk — realistic pace through dense canopy
+FOREST_WALK_SPEED = 0.12   # slow walk — realistic pace through dense canopy
 # City (Building District) — enlarged so the drone has room to roam toward
 # buildings.  Buildings sit in a ring; the ring road and footpaths scale with it.
 BUILDING_RING_MIN = 11.0
@@ -196,13 +281,13 @@ HUMAN_STAND_Z = 0.62
 # right up to one building, holds, returns, then heads to the next building, so
 # the follower drone actually approaches buildings (see city_walk).
 CITY_INNER_COUNT   = 8      # buildings on the close, walk-up-able inner ring
-CITY_VISIT_SECONDS = 36.0   # seconds per out-and-back building visit (slow stroll)
+CITY_VISIT_SECONDS = 120.0  # seconds per out-and-back building visit (slow stroll)
 CITY_APPROACH_GAP  = 0.9    # how close (m) to a building wall the user stops
 # Fallback orbit (used only if the city layout wasn't recorded for some reason)
 CITY_WALK_R_MIN = 1.2
 CITY_WALK_R_MAX = 8.6
-CITY_WALK_ORBIT = 0.11
-CITY_WALK_BREATHE = 0.13
+CITY_WALK_ORBIT = 0.065
+CITY_WALK_BREATHE = 0.075
 # Approach points (np.array([x, y])) the user walks out to, one per inner
 # building, sorted by angle so the tour circles the city.  Populated by
 # spawn_buildings() when the Building District is built.
@@ -266,6 +351,56 @@ def city_walk(t):
     home = np.array([0.5 * math.cos(2.3 * k), 0.5 * math.sin(2.3 * k)])
     pos  = home + (target - home) * s
     return np.array([pos[0], pos[1], 0.0])
+
+
+def vineyard_walk(t):
+    """Walk along the central row of the vineyard, looping at the far end."""
+    progress = (t * VINEYARD_WALK_SPEED) % (VINEYARD_ROW_LENGTH * 2)
+    # Out-and-back: 0→L = forward, L→2L = reverse
+    if progress <= VINEYARD_ROW_LENGTH:
+        x = VINEYARD_START_X + progress
+    else:
+        x = VINEYARD_START_X + (VINEYARD_ROW_LENGTH * 2 - progress)
+    y = 0.3 * math.sin(progress * 0.6)   # gentle lateral weave along centre row
+    return np.array([x, y, 0.0])
+
+
+def parking_walk(t):
+    """Serpentine walk through the parking lot — piece-wise linear between waypoints."""
+    pts  = PARKING_WAYPOINTS
+    n    = len(pts)
+    frac = (t % PARKING_WALK_CYCLE_T) / PARKING_WALK_CYCLE_T
+    seg_f = frac * (n - 1)
+    seg_i = min(int(seg_f), n - 2)
+    alpha = seg_f - seg_i
+    p0    = np.array(pts[seg_i],     dtype=float)
+    p1    = np.array(pts[seg_i + 1], dtype=float)
+    pos   = p0 + alpha * (p1 - p0)
+    return np.array([pos[0], pos[1], 0.0])
+
+
+def beach_walk(t):
+    """Leisurely walk along the beach with gentle lateral drift toward/away from water."""
+    progress = (t * BEACH_WALK_SPEED) % BEACH_LENGTH
+    x = BEACH_START_X + progress
+    y = 1.4 * math.sin(progress * 0.28) + 0.4 * math.sin(progress * 0.9)
+    return np.array([x, y, 0.0])
+
+
+def night_walk(t):
+    """Same figure-8 path as park but at a slower evening-stroll pace."""
+    return figure8(t * NIGHT_WALK_SPEED, scale=3.0)
+
+
+def rooftop_walk(t):
+    """Slow elliptical lap around the usable area of the rooftop platform."""
+    ang = ROOFTOP_WALK_SPEED * t
+    # Rounded rectangle via superellipse (exponent 4/3 rounds the corners nicely)
+    c, s = math.cos(ang), math.sin(ang)
+    exp = 4.0 / 3.0
+    x = ROOFTOP_WALK_RX * math.copysign(abs(c) ** exp, c)
+    y = ROOFTOP_WALK_RY * math.copysign(abs(s) ** exp, s)
+    return np.array([x, y, 0.0])
 
 
 def forest_walk(t):
@@ -1115,6 +1250,209 @@ def build_park_environment(phys):
     return obstacles
 
 
+def build_night_environment(phys):
+    """Park terrain at night — same grass/trees plus streetlamp props."""
+    obstacles = build_park_environment(phys)
+
+    # Streetlamps: tall pole + bright cap sphere
+    for lx, ly in NIGHT_LAMP_POSITIONS:
+        # Pole (collision-less visual prop — narrow enough to ignore for nav)
+        pole_col = p.createCollisionShape(
+            p.GEOM_CYLINDER, radius=0.06, height=3.6, physicsClientId=phys)
+        pole_vis = p.createVisualShape(
+            p.GEOM_CYLINDER, radius=0.06, length=3.6,
+            rgbaColor=[0.35, 0.35, 0.35, 1.0], physicsClientId=phys)
+        p.createMultiBody(0, pole_col, pole_vis,
+                          [lx, ly, 1.8], physicsClientId=phys)
+        # Lamp head (small sphere, warm yellow)
+        head_col = p.createCollisionShape(
+            p.GEOM_SPHERE, radius=0.22, physicsClientId=phys)
+        head_vis = p.createVisualShape(
+            p.GEOM_SPHERE, radius=0.22,
+            rgbaColor=[1.0, 0.97, 0.75, 1.0], physicsClientId=phys)
+        p.createMultiBody(0, head_col, head_vis,
+                          [lx, ly, 3.7], physicsClientId=phys)
+
+    return obstacles
+
+
+def build_rooftop_environment(phys):
+    """Flat rooftop platform surrounded by low parapet walls."""
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1,
+                        rgbaColor=[0.55, 0.55, 0.58, 1.0],
+                        physicsClientId=phys)
+
+    obstacles = []
+    half_x = ROOFTOP_PLATFORM_X
+    half_y = ROOFTOP_PLATFORM_Y
+    wh     = ROOFTOP_WALL_H
+    wt     = 0.22
+
+    wall_specs = [
+        ([0,           -(half_y + wt/2), wh/2], [half_x*2 + wt*2, wt,     wh]),
+        ([0,            (half_y + wt/2), wh/2], [half_x*2 + wt*2, wt,     wh]),
+        ([-(half_x + wt/2), 0,           wh/2], [wt,     half_y*2, wh]),
+        ([ (half_x + wt/2), 0,           wh/2], [wt,     half_y*2, wh]),
+    ]
+    for pos, size in wall_specs:
+        half = [s / 2 for s in size]
+        col = p.createCollisionShape(
+            p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
+        vis = p.createVisualShape(
+            p.GEOM_BOX, halfExtents=half,
+            rgbaColor=[0.72, 0.72, 0.76, 1.0], physicsClientId=phys)
+        body = p.createMultiBody(0, col, vis, pos, physicsClientId=phys)
+        max_r = max(half[0], half[1]) + 0.3
+        obstacles.append({"id": body, "radius": max_r,
+                          "position": np.array([pos[0], pos[1]], dtype=float)})
+
+    # Four corner ventilation boxes (minor obstacle variety)
+    for cx, cy in [(-7.5, -5.0), (-7.5, 5.0), (7.5, -5.0), (7.5, 5.0)]:
+        bh = [0.45, 0.45, 0.5]
+        col = p.createCollisionShape(
+            p.GEOM_BOX, halfExtents=bh, physicsClientId=phys)
+        vis = p.createVisualShape(
+            p.GEOM_BOX, halfExtents=bh,
+            rgbaColor=[0.60, 0.60, 0.63, 1.0], physicsClientId=phys)
+        body = p.createMultiBody(0, col, vis,
+                                 [cx, cy, bh[2]], physicsClientId=phys)
+        obstacles.append({"id": body, "radius": 0.7,
+                          "position": np.array([cx, cy], dtype=float)})
+
+    return obstacles
+
+
+def build_vineyard_environment(phys):
+    """Vineyard with three rows of thin vine trellis posts."""
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1,
+                        rgbaColor=[0.68, 0.55, 0.36, 1.0],   # dry soil brown
+                        physicsClientId=phys)
+
+    obstacles = []
+    for ry in VINEYARD_ROW_Y:
+        for px in VINEYARD_POST_XS:
+            col = p.createCollisionShape(
+                p.GEOM_CYLINDER, radius=VINEYARD_POST_R,
+                height=VINEYARD_WIRE_H, physicsClientId=phys)
+            vis = p.createVisualShape(
+                p.GEOM_CYLINDER, radius=VINEYARD_POST_R,
+                length=VINEYARD_WIRE_H,
+                rgbaColor=[0.45, 0.28, 0.12, 1.0], physicsClientId=phys)
+            p.createMultiBody(0, col, vis,
+                              [px, ry, VINEYARD_WIRE_H / 2], physicsClientId=phys)
+            # Only posts in the adjacent rows (not the centre walk row) are
+            # real obstacles for the nav SAC; centre posts are thin enough to
+            # avoid with the small avoidance radius.
+            if ry != 0.0:
+                obstacles.append({"id": -1,
+                                   "radius": VINEYARD_POST_R + 0.6,
+                                   "position": np.array([px, ry], dtype=float)})
+
+        # Wire cross-bars (visual-only, zero mass)
+        for i in range(len(VINEYARD_POST_XS) - 1):
+            x0, x1 = VINEYARD_POST_XS[i], VINEYARD_POST_XS[i + 1]
+            seg_len = abs(x1 - x0)
+            wire_vis = p.createVisualShape(
+                p.GEOM_CYLINDER, radius=0.015, length=seg_len,
+                rgbaColor=[0.60, 0.60, 0.60, 0.8], physicsClientId=phys)
+            p.createMultiBody(
+                0, -1, wire_vis,
+                [(x0 + x1) / 2, ry, VINEYARD_WIRE_H],
+                p.getQuaternionFromEuler([0, math.pi / 2, 0]),
+                physicsClientId=phys)
+
+    # Dense foliage canopy along each row (large sphere, visual only)
+    for ry in VINEYARD_ROW_Y:
+        for px in VINEYARD_POST_XS:
+            fol_vis = p.createVisualShape(
+                p.GEOM_SPHERE, radius=0.45,
+                rgbaColor=[0.20, 0.55, 0.15, 0.9], physicsClientId=phys)
+            p.createMultiBody(0, -1, fol_vis,
+                              [px, ry, VINEYARD_WIRE_H + 0.2], physicsClientId=phys)
+
+    return obstacles
+
+
+def build_parking_environment(phys):
+    """Asphalt car park with two rows of parked vehicles."""
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1,
+                        rgbaColor=[0.30, 0.30, 0.32, 1.0],   # asphalt grey
+                        physicsClientId=phys)
+
+    obstacles = []
+    car_colors = [
+        [0.85, 0.12, 0.12, 1.0],  # red
+        [0.15, 0.35, 0.72, 1.0],  # blue
+        [0.88, 0.88, 0.88, 1.0],  # silver
+        [0.10, 0.10, 0.10, 1.0],  # black
+        [0.25, 0.55, 0.25, 1.0],  # green
+        [0.92, 0.72, 0.10, 1.0],  # yellow
+        [0.72, 0.40, 0.20, 1.0],  # brown
+        [0.55, 0.10, 0.65, 1.0],  # purple
+    ]
+    for i, (cx, cy, hl, hw) in enumerate(PARKING_CARS):
+        car_h = 0.75   # car body height (m)
+        half  = [hl, hw, car_h / 2]
+        col = p.createCollisionShape(
+            p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
+        vis = p.createVisualShape(
+            p.GEOM_BOX, halfExtents=half,
+            rgbaColor=car_colors[i % len(car_colors)], physicsClientId=phys)
+        body = p.createMultiBody(0, col, vis,
+                                 [cx, cy, car_h / 2], physicsClientId=phys)
+        obstacles.append({"id": body, "radius": max(hl, hw) + 0.4,
+                          "position": np.array([cx, cy], dtype=float)})
+
+    # Parking bay line markings — thin flat boxes (visual only, zero mass)
+    for cx, cy, hl, hw in PARKING_CARS:
+        line_half = [hl + 0.05, 0.05, 0.005]
+        lvis = p.createVisualShape(
+            p.GEOM_BOX, halfExtents=line_half,
+            rgbaColor=[0.95, 0.95, 0.20, 0.9], physicsClientId=phys)
+        p.createMultiBody(0, -1, lvis,
+                          [cx, cy + (hw + 0.1) * (1 if cy > 0 else -1), 0.005],
+                          physicsClientId=phys)
+
+    return obstacles
+
+
+def build_beach_environment(phys):
+    """Open sandy beach — warm sand ground, scattered rocks, no structural obstacles."""
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1,
+                        rgbaColor=[0.93, 0.87, 0.65, 1.0],   # sandy colour
+                        physicsClientId=phys)
+
+    obstacles = []
+    for rx, ry in BEACH_ROCK_POSITIONS:
+        rock_r = float(np.random.uniform(0.28, 0.45))
+        col = p.createCollisionShape(
+            p.GEOM_SPHERE, radius=rock_r, physicsClientId=phys)
+        vis = p.createVisualShape(
+            p.GEOM_SPHERE, radius=rock_r,
+            rgbaColor=[0.58, 0.52, 0.46, 1.0], physicsClientId=phys)
+        p.createMultiBody(0, col, vis,
+                          [rx, ry, rock_r * 0.55], physicsClientId=phys)
+        obstacles.append({"id": -1, "radius": rock_r + 0.3,
+                          "position": np.array([rx, ry], dtype=float)})
+
+    # Low driftwood log near the water edge (decorative/minor obstacle)
+    log_col = p.createCollisionShape(
+        p.GEOM_CYLINDER, radius=0.18, height=2.5, physicsClientId=phys)
+    log_vis = p.createVisualShape(
+        p.GEOM_CYLINDER, radius=0.18, length=2.5,
+        rgbaColor=[0.55, 0.43, 0.30, 1.0], physicsClientId=phys)
+    p.createMultiBody(
+        0, log_col, log_vis, [3.5, -3.2, 0.18],
+        p.getQuaternionFromEuler([0, 0, 0.6]),
+        physicsClientId=phys)
+
+    return obstacles
+
+
 def build_forest_environment(phys):
     plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
     p.changeVisualShape(plane_id, -1, rgbaColor=[0.12, 0.25, 0.13, 1], physicsClientId=phys)
@@ -1331,6 +1669,16 @@ def build_environment(phys, scenario):
         obs = build_trail_environment(phys)
         obs += build_trail_crowd(phys)
         return obs
+    if scenario == SCENARIO_NIGHT:
+        return build_night_environment(phys)
+    if scenario == SCENARIO_ROOFTOP:
+        return build_rooftop_environment(phys)
+    if scenario == SCENARIO_BEACH:
+        return build_beach_environment(phys)
+    if scenario == SCENARIO_PARKING:
+        return build_parking_environment(phys)
+    if scenario == SCENARIO_VINEYARD:
+        return build_vineyard_environment(phys)
     return build_park_environment(phys)
 
 
@@ -1343,6 +1691,16 @@ def scenario_user_position(scenario, t_wall):
         return city_walk(t_wall)
     if scenario == SCENARIO_PARK:
         return park_walk(t_wall)
+    if scenario == SCENARIO_NIGHT:
+        return night_walk(t_wall)
+    if scenario == SCENARIO_ROOFTOP:
+        return rooftop_walk(t_wall)
+    if scenario == SCENARIO_BEACH:
+        return beach_walk(t_wall)
+    if scenario == SCENARIO_PARKING:
+        return parking_walk(t_wall)
+    if scenario == SCENARIO_VINEYARD:
+        return vineyard_walk(t_wall)
     return figure8(t_wall * USER_WALK_SPEED)
 
 
@@ -1359,10 +1717,26 @@ def predictive_gimbal_target(user_pos, user_velocity, confidence, t_wall):
     ], dtype=float)
 
     if confidence < CONFIDENCE_THRESH:
-        # If the marker is weak or lost, sweep around the predicted position.
-        sweep = t_wall * 2.2
-        target[0] += GIMBAL_SEARCH_RADIUS * math.cos(sweep)
-        target[1] += GIMBAL_SEARCH_RADIUS * math.sin(sweep)
+        # Marker is weak or lost — sweep around the predicted position.
+        # If the user has a clear velocity, bias the search in that direction:
+        # on linear-path scenarios (trail, forest, beach) the target keeps
+        # walking so looking ahead recovers lock faster than a pure circle.
+        sweep_r = GIMBAL_SEARCH_RADIUS * 1.3   # slightly wider when searching
+        vel_xy  = np.array(user_velocity[:2], dtype=float)
+        vel_spd = float(np.linalg.norm(vel_xy))
+        if vel_spd > 0.05:
+            vel_dir  = vel_xy / vel_spd
+            circle   = np.array([math.cos(t_wall * 2.2), math.sin(t_wall * 2.2)])
+            # 65% toward velocity direction, 35% circular sweep
+            sweep_vec = 0.65 * vel_dir + 0.35 * circle
+            sweep_norm = float(np.linalg.norm(sweep_vec))
+            if sweep_norm > 1e-6:
+                sweep_vec /= sweep_norm
+            target[0] += sweep_r * sweep_vec[0]
+            target[1] += sweep_r * sweep_vec[1]
+        else:
+            target[0] += sweep_r * math.cos(t_wall * 2.2)
+            target[1] += sweep_r * math.sin(t_wall * 2.2)
 
     return target
 
@@ -4222,25 +4596,14 @@ class ScenarioLauncher:
         right_panel = tk.Frame(content, bg="#0b1120")
         right_panel.grid(row=0, column=1, sticky="nsew")
         right_panel.grid_columnconfigure(0, weight=1)
-        right_panel.grid_rowconfigure(1, weight=1)
 
-        scenario_panel = tk.Frame(right_panel, bg="#0b1120")
-        scenario_panel.grid(row=0, column=0, sticky="ew")
-        scenario_panel.grid_columnconfigure(0, weight=1)
-
-        settings_panel = tk.Frame(
-            right_panel,
-            bg="#101827",
-            padx=16,
-            pady=16,
-            highlightthickness=1,
-            highlightbackground="#26364f",
-        )
-        settings_panel.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
-        settings_panel.grid_columnconfigure(0, weight=1)
+        # ── Scenario header (non-scrolling) ──────────────────────────────────
+        sc_header = tk.Frame(right_panel, bg="#0b1120")
+        sc_header.grid(row=0, column=0, sticky="ew")
+        sc_header.grid_columnconfigure(0, weight=1)
 
         tk.Label(
-            scenario_panel,
+            sc_header,
             text="Scenario",
             fg="#f8fafc",
             bg="#0b1120",
@@ -4249,16 +4612,78 @@ class ScenarioLauncher:
         ).grid(row=0, column=0, sticky="ew")
 
         tk.Label(
-            scenario_panel,
+            sc_header,
             text="Pick the world SkyShade should fly through.",
             fg="#aab8cf",
             bg="#0b1120",
             font=("Arial", 11),
             anchor="w",
-        ).grid(row=1, column=0, sticky="ew", pady=(2, 12))
+        ).grid(row=1, column=0, sticky="ew", pady=(2, 8))
 
-        for row, scenario in enumerate(SCENARIO_CHOICES, start=2):
+        # ── Scrollable scenario card list ─────────────────────────────────────
+        scroll_outer = tk.Frame(right_panel, bg="#0b1120")
+        scroll_outer.grid(row=1, column=0, sticky="nsew")
+        scroll_outer.grid_columnconfigure(0, weight=1)
+        scroll_outer.grid_rowconfigure(0, weight=1)
+        right_panel.grid_rowconfigure(1, weight=1)
+
+        sc_canvas = tk.Canvas(scroll_outer, bg="#0b1120",
+                              highlightthickness=0, bd=0)
+        sc_canvas.grid(row=0, column=0, sticky="nsew")
+
+        sc_scrollbar = tk.Scrollbar(scroll_outer, orient="vertical",
+                                    command=sc_canvas.yview)
+        sc_scrollbar.grid(row=0, column=1, sticky="ns")
+        sc_canvas.configure(yscrollcommand=sc_scrollbar.set)
+
+        scenario_panel = tk.Frame(sc_canvas, bg="#0b1120")
+        scenario_panel.grid_columnconfigure(0, weight=1)
+
+        _sp_window = sc_canvas.create_window((0, 0), window=scenario_panel,
+                                             anchor="nw")
+
+        def _on_sp_configure(event):
+            sc_canvas.configure(scrollregion=sc_canvas.bbox("all"))
+
+        def _on_canvas_resize(event):
+            sc_canvas.itemconfig(_sp_window, width=event.width)
+
+        scenario_panel.bind("<Configure>", _on_sp_configure)
+        sc_canvas.bind("<Configure>", _on_canvas_resize)
+
+        def _on_mousewheel(event):
+            try:
+                sc_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+
+        def _bind_scroll(widget):
+            widget.bind("<MouseWheel>",  _on_mousewheel)
+            widget.bind("<Button-4>",    lambda e: sc_canvas.yview_scroll(-1, "units"))
+            widget.bind("<Button-5>",    lambda e: sc_canvas.yview_scroll( 1, "units"))
+            for child in widget.winfo_children():
+                _bind_scroll(child)
+
+        sc_canvas.bind("<MouseWheel>",  _on_mousewheel)
+        sc_canvas.bind("<Button-4>",    lambda e: sc_canvas.yview_scroll(-1, "units"))
+        sc_canvas.bind("<Button-5>",    lambda e: sc_canvas.yview_scroll( 1, "units"))
+        # Re-bind after all cards are built
+        self.root.after(200, lambda: _bind_scroll(scenario_panel))
+
+        for row, scenario in enumerate(SCENARIO_CHOICES, start=0):
             self._scenario_card(scenario_panel, row, scenario)
+
+        # ── Mission Setup (below the scroll area) ────────────────────────────
+        settings_panel = tk.Frame(
+            right_panel,
+            bg="#101827",
+            padx=16,
+            pady=16,
+            highlightthickness=1,
+            highlightbackground="#26364f",
+        )
+        settings_panel.grid(row=2, column=0, sticky="ew", pady=(14, 0))
+        settings_panel.grid_columnconfigure(0, weight=1)
 
         tk.Label(
             settings_panel,
@@ -6156,6 +6581,36 @@ def run(
                 cameraTargetPosition=[0, 0, 2.0],
                 physicsClientId=phys,
             )
+        elif scenario == SCENARIO_NIGHT:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=12.0, cameraYaw=25, cameraPitch=-28,
+                cameraTargetPosition=[0, 0, 1],
+                physicsClientId=phys,
+            )
+        elif scenario == SCENARIO_ROOFTOP:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=18.0, cameraYaw=45, cameraPitch=-35,
+                cameraTargetPosition=[0, 0, 1.5],
+                physicsClientId=phys,
+            )
+        elif scenario == SCENARIO_BEACH:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=16.0, cameraYaw=10, cameraPitch=-22,
+                cameraTargetPosition=[0, 0, 1.0],
+                physicsClientId=phys,
+            )
+        elif scenario == SCENARIO_PARKING:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=20.0, cameraYaw=0, cameraPitch=-30,
+                cameraTargetPosition=[0, 0, 1.0],
+                physicsClientId=phys,
+            )
+        elif scenario == SCENARIO_VINEYARD:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=18.0, cameraYaw=15, cameraPitch=-25,
+                cameraTargetPosition=[0, 0, 1.5],
+                physicsClientId=phys,
+            )
         else:
             p.resetDebugVisualizerCamera(
                 cameraDistance=11, cameraYaw=30, cameraPitch=-27,
@@ -6208,9 +6663,11 @@ def run(
     if scenario == SCENARIO_FOREST:
         flight_controller.tune_pid_for_forest()
     if scenario == SCENARIO_TRAIL:
-        # Trail also benefits from no look-ahead (straight path with crowds)
         flight_controller._lead_seconds = 0.25
         flight_controller._max_lead_m   = 0.4
+    if scenario == SCENARIO_ROOFTOP:
+        # Rooftop: tighter hover gains to fight constant wind
+        flight_controller.tune_pid_for_forest()   # borrows stiffer PID coefficients
     umbrella   = UmbrellaClassifier()
     nav_policy = NavSafetyPolicy()
 
@@ -6434,9 +6891,17 @@ def run(
 
             # ── Sub-3: Env decision (1 Hz) ────────────────────────────────────
             if tick % CONTROL_HZ == 0:
-                lux = weather_now["lux"]
+                lux  = weather_now["lux"]
                 rain = weather_now["rain"]
                 wind = weather_now["wind"]
+                # Rooftop: the physical wind injected into the drone is stronger
+                # than the weather controller's generic reading.  Reflect the
+                # actual wind in what the SVM sees so it can make the right call.
+                if scenario == SCENARIO_ROOFTOP:
+                    rooftop_phys_wind = ROOFTOP_WIND_MIN + (
+                        ROOFTOP_WIND_MAX - ROOFTOP_WIND_MIN
+                    ) * 0.5 * (1 + math.sin(0.11 * t_wall))
+                    wind = max(wind, rooftop_phys_wind)
                 cmd_int      = umbrella.predict(lux, rain, wind)
                 umbrella_cmd = "DEPLOY" if cmd_int else "STOW"
                 deployed     = cmd_int == 1
@@ -6511,10 +6976,19 @@ def run(
             force += avoidance
             force[2] += HOVER_FORCE_N
             wind_mag = float(weather_now.get("wind", 0.0))
+            if scenario == SCENARIO_ROOFTOP:
+                wind_mag = max(wind_mag, ROOFTOP_WIND_MIN +
+                               (ROOFTOP_WIND_MAX - ROOFTOP_WIND_MIN)
+                               * 0.5 * (1 + math.sin(0.11 * t_wall)))
             gust_angle = 0.7 * t_wall + 2.0 * math.sin(0.23 * t_wall)
             gust = wind_mag * WIND_FORCE_SCALE
             force[0] += math.cos(gust_angle) * gust
             force[1] += math.sin(gust_angle) * gust
+            if scenario == SCENARIO_BEACH:
+                # Steady lateral sea-breeze: fixed direction (y-axis), slight gust
+                sea_gust = BEACH_SIDE_WIND * WIND_FORCE_SCALE * (
+                    1.0 + 0.2 * math.sin(0.17 * t_wall))
+                force[1] += sea_gust
             avoidance_for_display = avoidance.copy()
 
             for _ in range(STEPS_PER_ACTION):
@@ -6834,10 +7308,37 @@ class ScenarioCompleteDialog:
         except tk.TclError:
             return None, self._scenario
 
+        # Detect DPI and derive a UI scale factor so the dialog looks right on
+        # HiDPI / 4K screens.  Tk's default is 96 DPI; scale linearly from there,
+        # clamped to [1.0, 3.0].  We then tell Tk to use the same factor so all
+        # fonts and widget measurements scale automatically.
+        try:
+            raw_dpi = self.root.winfo_fpixels('1i')   # actual pixels per inch
+            self._sf = max(1.0, min(3.0, raw_dpi / 96.0))
+        except Exception:
+            self._sf = 1.0
+        # For screens wider than FHD but where Tk still reports 96 DPI (common on
+        # Linux without compositor scaling), boost by screen width heuristic.
+        try:
+            sw_px = self.root.winfo_screenwidth()
+            if self._sf < 1.5 and sw_px >= 2560:
+                self._sf = max(self._sf, 1.5)
+            if self._sf < 2.0 and sw_px >= 3840:
+                self._sf = max(self._sf, 2.0)
+        except Exception:
+            pass
+        if self._sf > 1.05:
+            try:
+                self.root.tk.call('tk', 'scaling', self._sf)
+            except Exception:
+                pass
+
         self.root.title("SkyShade — Simulation Complete")
         self.root.configure(bg="#07111f")
         self.root.resizable(False, False)
-        self.root.minsize(520, 380)
+        min_w = int(520 * self._sf)
+        min_h = int(380 * self._sf)
+        self.root.minsize(min_w, min_h)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_ui()
@@ -6846,8 +7347,8 @@ class ScenarioCompleteDialog:
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        rw = max(520, self.root.winfo_reqwidth())
-        rh = max(380, self.root.winfo_reqheight())
+        rw = max(min_w, self.root.winfo_reqwidth())
+        rh = max(min_h, self.root.winfo_reqheight())
         self.root.geometry(f"{rw}x{rh}+{(sw - rw) // 2}+{(sh - rh) // 2}")
 
         self.root.mainloop()
@@ -6855,44 +7356,52 @@ class ScenarioCompleteDialog:
 
     # ── UI construction ───────────────────────────────────────────────────────
 
-    _W = 600   # fixed inner content width
+    _W = 600   # fixed inner content width (pre-scale; scaled in _build_report)
+
+    def _fs(self, base):
+        """Scale a font size by the detected DPI scale factor."""
+        return max(base, round(base * self._sf))
 
     def _build_ui(self):
-        pad = tk.Frame(self.root, bg="#07111f", padx=22, pady=16)
+        sf = self._sf
+        px = max(22, int(22 * sf))
+        py = max(16, int(16 * sf))
+        pad = tk.Frame(self.root, bg="#07111f", padx=px, pady=py)
         pad.pack(fill="both", expand=True)
 
         scenario_label = SCENARIO_LABELS.get(self._scenario, self._scenario)
         tk.Label(pad, text="Simulation Complete",
                  fg="#38bdf8", bg="#07111f",
-                 font=("Arial", 15, "bold"), anchor="w",
+                 font=("Arial", self._fs(15), "bold"), anchor="w",
                  ).pack(fill="x")
         tk.Label(pad,
                  text=(f"Scenario: {scenario_label}  ·  {self._duration:.0f} s  "
                        f"·  Flight: {self._flight.upper()}"),
                  fg="#64748b", bg="#07111f",
-                 font=("Arial", 9), anchor="w",
-                 ).pack(fill="x", pady=(1, 10))
+                 font=("Arial", self._fs(9)), anchor="w",
+                 ).pack(fill="x", pady=(1, int(10 * sf)))
 
         self._build_report(pad)
         self._build_scenario_picker(pad)
         self._build_buttons(pad)
 
     def _build_report(self, parent):
+        sf = self._sf
         card = tk.Frame(parent, bg="#111c2e")
-        card.pack(fill="x", pady=(0, 8))
+        card.pack(fill="x", pady=(0, int(8 * sf)))
 
         # Fixed column widths — label expands, value and verdict are fixed
         # col0=checkbox(28), col1=label(expands), col2=value(72), col3=verdict(150)
-        card.columnconfigure(0, weight=0, minsize=28)
+        card.columnconfigure(0, weight=0, minsize=int(28 * sf))
         card.columnconfigure(1, weight=1)
-        card.columnconfigure(2, weight=0, minsize=72)
-        card.columnconfigure(3, weight=0, minsize=150)
+        card.columnconfigure(2, weight=0, minsize=int(72 * sf))
+        card.columnconfigure(3, weight=0, minsize=int(150 * sf))
 
         tk.Label(card,
                  text="Post-Run Efficiency Report  —  tick to retrain",
                  fg="#38bdf8", bg="#111c2e",
-                 font=("Arial", 10, "bold"), anchor="w",
-                 padx=12, pady=6,
+                 font=("Arial", self._fs(10), "bold"), anchor="w",
+                 padx=int(12 * sf), pady=int(6 * sf),
                  ).grid(row=0, column=0, columnspan=4, sticky="ew")
         tk.Frame(card, bg="#1e3a5f", height=1).grid(
             row=1, column=0, columnspan=4, sticky="ew")
@@ -6909,6 +7418,11 @@ class ScenarioCompleteDialog:
             if val >= ok:   return f"~ {om}"
             return f"✗ {bm}"
 
+        _py = int(4 * sf)
+        _px_lbl = int(4 * sf)
+        _px_val = int(6 * sf)
+        _px_vdt = int(8 * sf)
+
         def _row(r, stage, lbl, val_s, verdict_s, rbg, rfg, pre=False, sub=False):
             if stage is not None:
                 var = tk.BooleanVar(value=pre)
@@ -6916,31 +7430,32 @@ class ScenarioCompleteDialog:
                 tk.Checkbutton(card, variable=var, bg="#111c2e",
                                activebackground="#111c2e",
                                selectcolor="#1e3a5f",
-                               ).grid(row=r, column=0, padx=(8, 0))
+                               ).grid(row=r, column=0, padx=(int(8 * sf), 0))
             else:
-                tk.Frame(card, bg="#111c2e", width=28).grid(row=r, column=0)
+                tk.Frame(card, bg="#111c2e", width=int(28 * sf)).grid(row=r, column=0)
 
             tk.Label(card, text=("    " if sub else "") + lbl,
                      fg="#64748b" if sub else "#94a3b8",
                      bg="#111c2e",
-                     font=("Arial", 9 if sub else 9, "bold"),
-                     anchor="w", padx=4, pady=4,
+                     font=("Arial", self._fs(9), "bold"),
+                     anchor="w", padx=_px_lbl, pady=_py,
                      ).grid(row=r, column=1, sticky="ew")
             tk.Label(card, text=val_s,
                      fg="#cbd5e1", bg="#111c2e",
-                     font=("Arial", 9, "bold"),
-                     anchor="e", padx=6, pady=4,
+                     font=("Arial", self._fs(9), "bold"),
+                     anchor="e", padx=_px_val, pady=_py,
                      ).grid(row=r, column=2, sticky="ew")
             tk.Label(card, text=verdict_s,
                      fg=rfg, bg=rbg,
-                     font=("Arial", 9, "bold"),
-                     anchor="w", padx=8, pady=4,
-                     ).grid(row=r, column=3, sticky="ew", padx=(3, 0))
+                     font=("Arial", self._fs(9), "bold"),
+                     anchor="w", padx=_px_vdt, pady=_py,
+                     ).grid(row=r, column=3, sticky="ew", padx=(int(3 * sf), 0))
 
         if not s:
             tk.Label(card, text="No efficiency data available.",
                      fg="#64748b", bg="#111c2e",
-                     font=("Arial", 9), anchor="w", padx=12, pady=6,
+                     font=("Arial", self._fs(9)), anchor="w",
+                     padx=int(12 * sf), pady=int(6 * sf),
                      ).grid(row=2, column=0, columnspan=4, sticky="ew")
         else:
             hover   = s.get("hover_pct",   0.0)
@@ -6985,8 +7500,8 @@ class ScenarioCompleteDialog:
             tk.Label(card,
                      text=f"Overall score:  {overall:.0f}%     Grade: {grade}",
                      fg=gfg, bg="#0b1726",
-                     font=("Arial", 11, "bold"), anchor="w",
-                     padx=12, pady=6,
+                     font=("Arial", self._fs(11), "bold"), anchor="w",
+                     padx=int(12 * sf), pady=int(6 * sf),
                      ).grid(row=8, column=0, columnspan=4, sticky="ew")
 
             hints = []
@@ -6996,9 +7511,9 @@ class ScenarioCompleteDialog:
             if hints:
                 tk.Label(card, text="  ".join(hints),
                          fg="#f59e0b", bg="#0b1726",
-                         font=("Arial", 8), anchor="w",
-                         padx=12, pady=4, justify="left",
-                         wraplength=self._W - 30,
+                         font=("Arial", self._fs(8)), anchor="w",
+                         padx=int(12 * sf), pady=int(4 * sf), justify="left",
+                         wraplength=int((self._W - 30) * sf),
                          ).grid(row=9, column=0, columnspan=4, sticky="ew")
 
             # Performance trend chart
@@ -7007,16 +7522,19 @@ class ScenarioCompleteDialog:
                 tk.Label(card,
                          text=f"Performance trend  ({len(all_runs)} run{'s' if len(all_runs)!=1 else ''})",
                          fg="#38bdf8", bg="#0d1b2a",
-                         font=("Arial", 8, "bold"), anchor="w",
-                         padx=12, pady=4,
+                         font=("Arial", self._fs(8), "bold"), anchor="w",
+                         padx=int(12 * sf), pady=int(4 * sf),
                          ).grid(row=10, column=0, columnspan=4, sticky="ew")
 
-                tc = tk.Canvas(card, bg="#0d1b2a", height=72,
+                chart_h = int(72 * sf)
+                tc = tk.Canvas(card, bg="#0d1b2a", height=chart_h,
                                highlightthickness=0)
                 tc.grid(row=11, column=0, columnspan=4,
-                        sticky="ew", padx=12, pady=(0, 6))
+                        sticky="ew", padx=int(12 * sf), pady=(0, int(6 * sf)))
 
-                def _draw(event=None, _tc=tc, _runs=all_runs):
+                _sf_cap = sf
+                def _draw(event=None, _tc=tc, _runs=all_runs, _sf=_sf_cap,
+                          _ch=chart_h):
                     try:
                         _tc.winfo_exists()
                     except Exception:
@@ -7024,53 +7542,58 @@ class ScenarioCompleteDialog:
                     if not _tc.winfo_exists():
                         return
                     _tc.delete("all")
-                    tw = int(_tc.winfo_width()) or (self._W - 24)
-                    th = 72
+                    tw = int(_tc.winfo_width()) or int((self._W - 24) * _sf)
+                    th = _ch
+                    label_h = int(14 * _sf)
+                    tick_h  = int(14 * _sf)
                     scores = [r.get("overall_pct", 0) for r in _runs]
                     grades = [r.get("grade", "?")     for r in _runs]
                     n = len(scores)
                     gcol = {"A":"#4ade80","B":"#60a5fa","C":"#fbbf24","D":"#f87171"}
                     raw_bw = tw / max(n, 1)
-                    bw = min(raw_bw, 48)          # cap bar width so few bars look tidy
-                    x_off = (tw - bw * n) / 2     # centre bars when capped
-                    plot_h = th - 22
+                    bw = min(raw_bw, int(48 * _sf))
+                    x_off = (tw - bw * n) / 2
+                    plot_h = th - label_h - tick_h
                     for i, (sc, gr) in enumerate(zip(scores, grades)):
                         bx = x_off + i * bw
                         bh = max(2, plot_h * sc / 100)
                         col = gcol.get(gr, "#64748b")
                         is_last = (i == n - 1)
                         _tc.create_rectangle(
-                            bx + 2, th - 14 - bh, bx + bw - 2, th - 14,
+                            bx + 2, th - tick_h - bh, bx + bw - 2, th - tick_h,
                             fill=col, outline="#e2e8f0" if is_last else "")
-                        _tc.create_text(bx + bw/2, th - 14 - bh - 3,
+                        _tc.create_text(bx + bw/2, th - tick_h - bh - 3,
                                         text=f"{sc:.0f}", fill=col,
-                                        font=("Arial", 7, "bold"), anchor="s")
-                        _tc.create_text(bx + bw/2, th - 4,
+                                        font=("Arial", max(6, int(7 * _sf)), "bold"),
+                                        anchor="s")
+                        _tc.create_text(bx + bw/2, th - int(4 * _sf),
                                         text=gr, fill="#475569",
-                                        font=("Arial", 7), anchor="s")
+                                        font=("Arial", max(6, int(7 * _sf))),
+                                        anchor="s")
                     if n >= 2:
                         pts = []
                         for i, sc in enumerate(scores):
                             pts.extend([x_off + i*bw + bw/2,
-                                        (th-14) - plot_h*sc/100])
+                                        (th - tick_h) - plot_h*sc/100])
                         _tc.create_line(*pts, fill="#94a3b8", width=1,
-                                        smooth=True, dash=(3,4))
+                                        smooth=True, dash=(3, 4))
 
                 tc.bind("<Configure>", _draw)
                 tc.after(60, _draw)
 
     def _build_scenario_picker(self, parent):
+        sf = self._sf
         outer = tk.Frame(parent, bg="#111c2e")
-        outer.pack(fill="x", pady=(0, 8))
+        outer.pack(fill="x", pady=(0, int(8 * sf)))
 
         tk.Label(outer, text="Run next scenario",
                  fg="#64748b", bg="#111c2e",
-                 font=("Arial", 8, "bold"), anchor="w",
-                 padx=12, pady=5,
+                 font=("Arial", self._fs(8), "bold"), anchor="w",
+                 padx=int(12 * sf), pady=int(5 * sf),
                  ).pack(fill="x")
 
         btn_row = tk.Frame(outer, bg="#111c2e")
-        btn_row.pack(fill="x", padx=10, pady=(0, 8))
+        btn_row.pack(fill="x", padx=int(10 * sf), pady=(0, int(8 * sf)))
         n_scenarios = len(SCENARIO_LABELS)
         for i in range(n_scenarios):
             btn_row.columnconfigure(i, weight=1)
@@ -7084,16 +7607,17 @@ class ScenarioCompleteDialog:
                 bg="#1e3a8a" if is_cur else "#1e293b",
                 fg="#bfdbfe" if is_cur else "#64748b",
                 activebackground="#2563eb", activeforeground="#ffffff",
-                relief="flat", font=("Arial", 9, "bold"),
-                padx=6, pady=7,
+                relief="flat", font=("Arial", self._fs(9), "bold"),
+                padx=int(6 * sf), pady=int(7 * sf),
             )
             btn.grid(row=0, column=col, sticky="ew",
-                     padx=(0, 5) if col < n_scenarios - 1 else 0)
+                     padx=(0, int(5 * sf)) if col < n_scenarios - 1 else 0)
             self._scenario_btns[key] = btn
 
     def _build_buttons(self, parent):
+        sf = self._sf
         row = tk.Frame(parent, bg="#07111f")
-        row.pack(fill="x", pady=(4, 0))
+        row.pack(fill="x", pady=(int(4 * sf), 0))
         for i in range(3):
             row.columnconfigure(i, weight=1)
 
@@ -7101,22 +7625,22 @@ class ScenarioCompleteDialog:
                   command=self._on_retrain_run,
                   bg="#2563eb", fg="#eff6ff",
                   activebackground="#1d4ed8", activeforeground="#ffffff",
-                  relief="flat", font=("Arial", 10, "bold"),
-                  padx=8, pady=9,
-                  ).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+                  relief="flat", font=("Arial", self._fs(10), "bold"),
+                  padx=int(8 * sf), pady=int(9 * sf),
+                  ).grid(row=0, column=0, sticky="ew", padx=(0, int(5 * sf)))
         tk.Button(row, text="Run Again",
                   command=self._on_run_again,
                   bg="#064e3b", fg="#d1fae5",
                   activebackground="#065f46", activeforeground="#ffffff",
-                  relief="flat", font=("Arial", 10, "bold"),
-                  padx=8, pady=9,
-                  ).grid(row=0, column=1, sticky="ew", padx=(0, 5))
+                  relief="flat", font=("Arial", self._fs(10), "bold"),
+                  padx=int(8 * sf), pady=int(9 * sf),
+                  ).grid(row=0, column=1, sticky="ew", padx=(0, int(5 * sf)))
         tk.Button(row, text="Close",
                   command=self._on_close,
                   bg="#1e293b", fg="#cbd5e1",
                   activebackground="#334155", activeforeground="#ffffff",
-                  relief="flat", font=("Arial", 10, "bold"),
-                  padx=8, pady=9,
+                  relief="flat", font=("Arial", self._fs(10), "bold"),
+                  padx=int(8 * sf), pady=int(9 * sf),
                   ).grid(row=0, column=2, sticky="ew")
 
     def _pick_scenario(self, key):

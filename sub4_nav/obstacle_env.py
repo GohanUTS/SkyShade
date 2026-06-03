@@ -96,6 +96,17 @@ def scenario_obstacles(scenario):
         # Urban trail — a central pinch (the bridge) plus a couple of bollards.
         return [(0.0, 1.7, 0.40), (0.0, -1.7, 0.40),
                 (-2.3, 0.4, 0.28), (2.3, -0.4, 0.28)]
+    if s == "parking":
+        # Parking lot — two rows of wide rectangular obstacles (cars).
+        # Mapped into the 10×8 nav room: cars at y≈±2.5 in two rows.
+        layout = []
+        for cx in (-3.0, -1.0, 1.0, 3.0):
+            layout.append((cx,  2.5, 0.90))   # row A (y > 0)
+            layout.append((cx, -2.5, 0.90))   # row B (y < 0)
+        return layout
+    if s in ("beach", "rooftop", "night"):
+        # Open environments — minimal fixed obstacles; test pure navigation.
+        return [(-3.5, 0.0, 0.25), (0.0, 2.5, 0.25), (3.5, 0.0, 0.25)]
     return list(OBSTACLES)
 
 # ── Sensor / physics constants ─────────────────────────────────────────────────
