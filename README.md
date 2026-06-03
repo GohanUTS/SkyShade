@@ -24,7 +24,7 @@ All trained models are included — no retraining required to run.
 
 ## Scenarios
 
-Ten hand-crafted simulation worlds, each stressing a different part of the AI stack:
+Eleven hand-crafted simulation worlds, each stressing a different part of the AI stack:
 
 | Key | Name | Environment | Challenge |
 |---|---|---|---|
@@ -38,6 +38,7 @@ Ten hand-crafted simulation worlds, each stressing a different part of the AI st
 | `parking` | Parking Lot | Detailed cars, store building, lamp posts | Rectangular box obstacles, aisle navigation |
 | `vineyard` | Vineyard | Vine trellis rows, grape clusters, farmhouse | Rhythmic post occlusion; tight nav corridors |
 | `snow` | Snowy Field | Frozen pond, pine trees, snowmen, wooden fence | Omnidirectional gusting wind; cold overcast |
+| `stadium` | Stadium | Oval track, tiered stands, floodlights, scoreboard | Circular target path tests the curved-walk curriculum |
 
 ---
 
@@ -220,7 +221,7 @@ All models are committed to the repository and load automatically on launch:
 
 ```
 SkyShade/
-├── run_sim.py              ← main simulation: launcher + physics loop + all 10 scenarios
+├── run_sim.py              ← main simulation: launcher + physics loop + all 11 scenarios
 ├── scenario_report.py      ← per-scenario performance analysis tool
 ├── train_sub2.py           ← headless PPO training (Sub-2)
 ├── train_sub4.py           ← headless SAC training (Sub-4)
