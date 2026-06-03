@@ -114,6 +114,7 @@ SCENARIO_LABELS = {
     SCENARIO_PARKING:   "Parking Lot",
     SCENARIO_VINEYARD:  "Vineyard",
     SCENARIO_SNOW:      "Snowy Field",
+    SCENARIO_STADIUM:   "Stadium",
 }
 SCENARIO_DESCRIPTIONS = {
     SCENARIO_PARK:      "Open park loop with light obstacles and figure-8 walking.",
@@ -6042,31 +6043,162 @@ class ScenarioLauncher:
             widget.bind("<Button-1>", lambda _event, value=scenario: self._set_scenario(value))
 
     def _draw_scenario_preview(self, canvas, scenario):
-        canvas.create_rectangle(0, 0, 112, 62, fill="#07111f", outline="")
-        canvas.create_rectangle(0, 37, 112, 62, fill="#12351f", outline="")
-        if scenario == SCENARIO_FOREST:
-            canvas.create_rectangle(0, 0, 112, 62, fill="#071a14", outline="")
-            canvas.create_polygon(0, 62, 34, 34, 78, 34, 112, 62, fill="#5b4329", outline="")
-            for x in (14, 32, 82, 98):
-                canvas.create_rectangle(x, 27, x + 4, 58, fill="#6b3f1d", outline="")
-                canvas.create_oval(x - 12, 9, x + 17, 36, fill="#1f6f3b", outline="")
-            canvas.create_line(16, 53, 97, 41, fill="#94a3b8", width=2)
-        elif scenario == SCENARIO_BUILDINGS:
-            canvas.create_rectangle(0, 0, 112, 62, fill="#08111f", outline="")
-            for x, top, color in [(7, 17, "#27364a"), (28, 8, "#334155"), (52, 21, "#1f2a44"), (80, 12, "#3b4251")]:
-                canvas.create_rectangle(x, top, x + 18, 45, fill=color, outline="")
-                for y in range(top + 7, 43, 10):
-                    canvas.create_rectangle(x + 5, y, x + 7, y + 3, fill="#fde68a", outline="")
-                    canvas.create_rectangle(x + 12, y, x + 14, y + 3, fill="#fde68a", outline="")
-            canvas.create_rectangle(0, 45, 112, 62, fill="#1f2937", outline="")
-            canvas.create_line(0, 53, 112, 53, fill="#facc15", width=2)
-        else:
-            canvas.create_rectangle(0, 0, 112, 62, fill="#0b2535", outline="")
-            canvas.create_rectangle(0, 34, 112, 62, fill="#1f5b35", outline="")
-            canvas.create_line(0, 51, 112, 33, fill="#9a7a4d", width=8)
+        W, H = 112, 62
+        canvas.create_rectangle(0, 0, W, H, fill="#07111f", outline="")
+
+        if scenario == SCENARIO_PARK:
+            canvas.create_rectangle(0, 0, W, H, fill="#0d2218", outline="")
+            canvas.create_rectangle(0, H//2, W, H, fill="#12351f", outline="")
+            canvas.create_line(10, 51, W-10, 33, fill="#9a7a4d", width=7)
             for x, y in [(16, 36), (84, 32), (96, 47)]:
-                canvas.create_rectangle(x, y, x + 4, y + 15, fill="#6b3f1d", outline="")
-                canvas.create_oval(x - 9, y - 15, x + 14, y + 6, fill="#2f7d42", outline="")
+                canvas.create_rectangle(x, y, x+4, y+15, fill="#6b3f1d", outline="")
+                canvas.create_oval(x-9, y-15, x+14, y+6, fill="#2f7d42", outline="")
+            canvas.create_oval(49, 14, 66, 30, outline="#dbeafe", width=2)
+
+        elif scenario == SCENARIO_FOREST:
+            canvas.create_rectangle(0, 0, W, H, fill="#071a14", outline="")
+            canvas.create_polygon(0, H, 34, 34, 78, 34, W, H, fill="#5b4329", outline="")
+            for x in (14, 32, 64, 82, 98):
+                canvas.create_rectangle(x, 27, x+4, 58, fill="#6b3f1d", outline="")
+                canvas.create_oval(x-12, 9, x+17, 36, fill="#1f6f3b", outline="")
+            canvas.create_line(16, 53, 97, 41, fill="#94a3b8", width=2)
+
+        elif scenario == SCENARIO_BUILDINGS:
+            canvas.create_rectangle(0, 0, W, H, fill="#08111f", outline="")
+            for x, top, color in [(7,17,"#27364a"),(28,8,"#334155"),(52,21,"#1f2a44"),(80,12,"#3b4251")]:
+                canvas.create_rectangle(x, top, x+18, 45, fill=color, outline="")
+                for y in range(top+7, 43, 10):
+                    canvas.create_rectangle(x+5, y, x+7, y+3, fill="#fde68a", outline="")
+                    canvas.create_rectangle(x+12, y, x+14, y+3, fill="#fde68a", outline="")
+            canvas.create_rectangle(0, 45, W, H, fill="#1f2937", outline="")
+            canvas.create_line(0, 53, W, 53, fill="#facc15", width=2)
+
+        elif scenario == SCENARIO_TRAIL:
+            canvas.create_rectangle(0, 0, W, H, fill="#0b1a28", outline="")
+            canvas.create_rectangle(0, 40, W, H, fill="#1a2a1a", outline="")
+            # Bridge
+            canvas.create_rectangle(32, 18, 78, 38, fill="#374151", outline="")
+            canvas.create_rectangle(32, 36, 78, 40, fill="#4b5563", outline="")
+            canvas.create_rectangle(32, 18, 36, 22, fill="#6b7280", outline="")
+            canvas.create_rectangle(74, 18, 78, 22, fill="#6b7280", outline="")
+            # Path
+            canvas.create_line(0, 50, W, 44, fill="#9a7a4d", width=6)
+            # Crowd dots
+            for cx, cy in [(18, 47), (90, 41), (96, 50)]:
+                canvas.create_oval(cx-3, cy-4, cx+3, cy+4, fill="#60a5fa", outline="")
+
+        elif scenario == SCENARIO_NIGHT:
+            canvas.create_rectangle(0, 0, W, H, fill="#020509", outline="")
+            canvas.create_rectangle(0, 38, W, H, fill="#071010", outline="")
+            # Stars
+            for sx, sy in [(8,6),(22,14),(45,3),(67,9),(88,5),(100,17),(55,18)]:
+                canvas.create_oval(sx, sy, sx+2, sy+2, fill="#e2e8f0", outline="")
+            # Lamp posts
+            for lx in (18, 56, 94):
+                canvas.create_line(lx, 50, lx, 20, fill="#9ca3af", width=2)
+                canvas.create_oval(lx-7, 13, lx+7, 22, fill="#fef3c7", outline="")
+            # Path
+            canvas.create_line(0, 50, W, 44, fill="#1f2a1a", width=8)
+
+        elif scenario == SCENARIO_ROOFTOP:
+            canvas.create_rectangle(0, 0, W, H, fill="#0d1117", outline="")
+            canvas.create_rectangle(8, 8, W-8, H-8, fill="#1f2937", outline="")
+            # Parapet
+            canvas.create_rectangle(8, 8, W-8, 14, fill="#374151", outline="")
+            canvas.create_rectangle(8, H-14, W-8, H-8, fill="#374151", outline="")
+            canvas.create_rectangle(8, 8, 14, H-8, fill="#374151", outline="")
+            canvas.create_rectangle(W-14, 8, W-8, H-8, fill="#374151", outline="")
+            # HVAC box
+            canvas.create_rectangle(22, 22, 44, 36, fill="#374151", outline="")
+            # Solar panels
+            canvas.create_rectangle(60, 20, 100, 36, fill="#1e3a5f", outline="")
+            # Wind lines
+            for ly in (18, 24, 30):
+                canvas.create_line(16, ly, 56, ly+3, fill="#94a3b8", width=1)
+
+        elif scenario == SCENARIO_BEACH:
+            # Sky
+            canvas.create_rectangle(0, 0, W, H*2//3, fill="#1d3461", outline="")
+            # Ocean
+            canvas.create_rectangle(0, H*2//3-6, W, H, fill="#1a56b0", outline="")
+            # Wet sand
+            canvas.create_rectangle(0, H*2//3-2, W, H*2//3+4, fill="#b8934f", outline="")
+            # Sand
+            canvas.create_rectangle(0, H*2//3+4, W, H, fill="#e8c87a", outline="")
+            # Beach umbrella
+            canvas.create_line(30, 55, 30, 34, fill="#92400e", width=2)
+            canvas.create_oval(18, 28, 42, 38, fill="#dc2626", outline="")
+            # Sun
+            canvas.create_oval(82, 6, 98, 22, fill="#fbbf24", outline="")
+            # Palm (simple)
+            canvas.create_line(90, H, 86, 40, fill="#7c4f1d", width=3)
+            canvas.create_oval(72, 30, 100, 44, fill="#15803d", outline="")
+
+        elif scenario == SCENARIO_PARKING:
+            canvas.create_rectangle(0, 0, W, H, fill="#1f1f21", outline="")
+            # Bay lines
+            for x in range(12, W-8, 20):
+                canvas.create_line(x, 8, x, 55, fill="#94a3b8", width=1)
+            # Cars (row A top, row B bottom)
+            car_colors_p = ["#dc2626","#1d4ed8","#9ca3af","#111111","#16a34a","#ca8a04"]
+            for i, cx in enumerate((10, 30, 50, 70, 90)):
+                canvas.create_rectangle(cx-7, 12, cx+7, 26, fill=car_colors_p[i%6], outline="")
+                canvas.create_rectangle(cx-7, 36, cx+7, 50, fill=car_colors_p[(i+2)%6], outline="")
+            # Drive lane marker
+            for dx in range(4, W, 16):
+                canvas.create_rectangle(dx, 30, dx+8, 32, fill="#facc15", outline="")
+
+        elif scenario == SCENARIO_VINEYARD:
+            canvas.create_rectangle(0, 0, W, H, fill="#2d1b08", outline="")
+            canvas.create_rectangle(0, 52, W, H, fill="#52350e", outline="")
+            # Vine rows
+            for ry in (15, 30, 45):
+                canvas.create_line(0, ry, W, ry, fill="#6b3f1d", width=1)
+                for px in range(8, W, 18):
+                    canvas.create_line(px, ry, px, ry+12, fill="#5c3317", width=2)
+                    canvas.create_oval(px-7, ry-10, px+7, ry+2, fill="#15803d", outline="")
+            # Farmhouse (end)
+            canvas.create_rectangle(96, 18, 112, 50, fill="#e5e7eb", outline="")
+            canvas.create_polygon(94, 18, 112, 18, 103, 8, fill="#dc2626", outline="")
+
+        elif scenario == SCENARIO_SNOW:
+            canvas.create_rectangle(0, 0, W, H, fill="#d1dce8", outline="")
+            canvas.create_rectangle(0, 42, W, H, fill="#e8edf5", outline="")
+            # Frozen pond
+            canvas.create_oval(32, 38, 80, 58, fill="#a8c4e0", outline="#7da8c8", width=1)
+            # Pine trees
+            for tx in (10, 22, 86, 98):
+                canvas.create_rectangle(tx-2, 38, tx+2, 56, fill="#7c4f1d", outline="")
+                canvas.create_polygon(tx, 10, tx-10, 34, tx+10, 34, fill="#154f1f", outline="")
+            # Snowman
+            canvas.create_oval(53, 38, 63, 50, fill="#f1f5f9", outline="")
+            canvas.create_oval(55, 28, 61, 38, fill="#f1f5f9", outline="")
+            canvas.create_oval(56, 20, 60, 28, fill="#f1f5f9", outline="")
+            canvas.create_oval(56, 23, 58, 25, fill="#111", outline="")  # eye
+            canvas.create_oval(58, 23, 60, 25, fill="#111", outline="")  # eye
+
+        elif scenario == SCENARIO_STADIUM:
+            canvas.create_rectangle(0, 0, W, H, fill="#0a1f0a", outline="")
+            # Tartan track (oval)
+            canvas.create_oval(6, 6, W-6, H-6, fill="#7f1d1d", outline="")
+            # Infield (green)
+            canvas.create_oval(22, 14, W-22, H-14, fill="#15803d", outline="")
+            # Track lane line
+            canvas.create_oval(6, 6, W-6, H-6, outline="#ffffff", width=1)
+            canvas.create_oval(14, 10, W-14, H-10, outline="#ffffff", width=1)
+            # Finish line
+            canvas.create_line(W-22, H//2-8, W-22, H//2+8, fill="#ffffff", width=2)
+            # Stands (grey blocks on edges)
+            for sy in (2, H-8):
+                canvas.create_rectangle(20, sy, W-20, sy+6, fill="#374151", outline="")
+            # Floodlight (corner)
+            canvas.create_line(4, 4, 10, 14, fill="#6b7280", width=2)
+            canvas.create_oval(8, 11, 14, 17, fill="#fef3c7", outline="")
+
+        else:
+            # Generic fallback
+            canvas.create_rectangle(0, 0, W, H, fill="#0b2535", outline="")
+            canvas.create_rectangle(0, 34, W, H, fill="#1f5b35", outline="")
             canvas.create_oval(49, 14, 66, 30, outline="#dbeafe", width=2)
 
     def _set_scenario(self, scenario):

@@ -2,10 +2,10 @@
   "subsystem": "Sub-4 Navigation",
   "algorithm": "SAC",
   "model": "ppo_nav_v1.zip",
-  "steps_done": 712528,
+  "steps_done": 912000,
   "efficiency_pct": 72,
   "warm_started": true,
-  "trained_at": 1780476594.652156,
-  "scenario": "default",
+  "trained_at": 1780478849.1221588,
+  "scenario": "buildings",
   "legacy_filename": "ppo_nav_v1.zip"
 }

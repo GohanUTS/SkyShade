@@ -104,9 +104,22 @@ def scenario_obstacles(scenario):
             layout.append((cx,  2.5, 0.90))   # row A (y > 0)
             layout.append((cx, -2.5, 0.90))   # row B (y < 0)
         return layout
-    if s in ("beach", "rooftop", "night"):
+    if s in ("beach", "rooftop", "night", "snow"):
         # Open environments — minimal fixed obstacles; test pure navigation.
         return [(-3.5, 0.0, 0.25), (0.0, 2.5, 0.25), (3.5, 0.0, 0.25)]
+    if s == "stadium":
+        # Stadium — four stand sections as large obstacles around the oval perimeter.
+        return [( 0.0,  3.5, 1.20),   # North stand
+                ( 0.0, -3.5, 1.20),   # South stand
+                ( 4.2,  0.0, 0.80),   # East end
+                (-4.2,  0.0, 0.80)]   # West end
+    if s in ("vineyard",):
+        # Vineyard — two flanking trellis rows, drone navigates the centre aisle.
+        layout = []
+        for cx in (-3.5, -1.5, 0.5, 2.5):
+            layout.append((cx,  2.2, 0.30))   # row A
+            layout.append((cx, -2.2, 0.30))   # row B
+        return layout
     return list(OBSTACLES)
 
 # ── Sensor / physics constants ─────────────────────────────────────────────────
