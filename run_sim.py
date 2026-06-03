@@ -96,11 +96,12 @@ SCENARIO_BEACH     = "beach"
 SCENARIO_PARKING   = "parking"
 SCENARIO_VINEYARD  = "vineyard"
 SCENARIO_SNOW      = "snow"
+SCENARIO_STADIUM   = "stadium"
 SCENARIO_CHOICES = (
     SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS,
     SCENARIO_TRAIL, SCENARIO_NIGHT, SCENARIO_ROOFTOP,
     SCENARIO_BEACH, SCENARIO_PARKING, SCENARIO_VINEYARD,
-    SCENARIO_SNOW,
+    SCENARIO_SNOW, SCENARIO_STADIUM,
 )
 SCENARIO_LABELS = {
     SCENARIO_PARK:      "Park",
@@ -125,7 +126,14 @@ SCENARIO_DESCRIPTIONS = {
     SCENARIO_PARKING:   "Car park with rows of parked vehicles; the human weaves between them while the drone navigates box obstacles.",
     SCENARIO_VINEYARD:  "Vineyard with rows of vine trellises; person walks between rows, creating regular partial occlusion and tight nav corridors.",
     SCENARIO_SNOW:      "Snow-covered field in winter — frozen pond, pine trees, snowmen; gusty wind and overcast sky test the umbrella SVM in cold conditions.",
+    SCENARIO_STADIUM:   "Athletics stadium with a 400 m oval track, stands, scoreboards, and floodlights; the person jogs a lap while the drone tracks a fast circular target.",
 }
+
+# ── Stadium scenario constants ────────────────────────────────────────────────
+STADIUM_TRACK_RX    = 7.5    # x semi-axis of the oval track (m)
+STADIUM_TRACK_RY    = 4.8    # y semi-axis of the oval track (m)
+STADIUM_JOG_SPEED   = 0.025  # rad/s — brisk walk (~0.16–0.19 m/s average on oval)
+STADIUM_WIND        = 1.5    # m/s gentle ambient wind (open stadium)
 
 # ── Snowy Field scenario constants ────────────────────────────────────────────
 SNOW_WALK_SPEED   = 0.06   # rad/s — slow careful walk through snow (same pattern as park)
@@ -350,6 +358,59 @@ def city_walk(t):
     home = np.array([0.5 * math.cos(2.3 * k), 0.5 * math.sin(2.3 * k)])
     pos  = home + (target - home) * s
     return np.array([pos[0], pos[1], 0.0])
+
+
+def stadium_walk(t):
+    """Jog around the oval athletics track at constant linear speed.
+
+    The oval is parameterised as two straight sections + two semicircular
+    ends so the person moves at exactly STADIUM_JOG_SPEED × mean_radius m/s
+    throughout — no corner spikes that would make the drone fall behind.
+    """
+    # Straight-section length and semicircle radius
+    rx, ry = STADIUM_TRACK_RX, STADIUM_TRACK_RY
+    straight = 2.0 * (rx - ry)          # length of each straight (m)
+    arc      = math.pi * ry              # half-circumference of each end
+    perim    = 2.0 * straight + 2.0 * arc  # total track length (m)
+    speed_m  = STADIUM_JOG_SPEED * (rx + ry) / 2.0   # m/s (mean radius scale)
+    period   = perim / max(speed_m, 1e-6)
+    s_dist   = (t * speed_m) % perim     # distance along track
+
+    # Segment layout (going anti-clockwise from right straight):
+    # 0 → straight:  x=rx-ry…rx-ry, y=ry…-ry  (right straight, going south)  ← wait, let me re-do
+    # Actually: start at (rx, 0) going counter-clockwise (standard athletics direction)
+    #   Seg 0: right semicircle (bottom half): angle 0 → -π  at (rx-ry + ry*cos, ry*sin)
+    # Simpler: 4-segment layout starting at top-right corner going counter-clockwise
+    #  Segment 0: top straight,   x: rx-ry → -(rx-ry),  y = +ry
+    #  Segment 1: left semicircle,  centre (-( rx-ry), 0), angle π/2 → -π/2
+    #  Segment 2: bottom straight, x: -(rx-ry) → (rx-ry), y = -ry
+    #  Segment 3: right semicircle, centre (+( rx-ry), 0), angle -π/2 → +π/2
+    cx_off = rx - ry   # x offset of the two semicircle centres
+
+    if s_dist < straight:
+        # Top straight (left to right)
+        frac = s_dist / straight
+        x = -cx_off + frac * 2 * cx_off
+        y = ry
+    elif s_dist < straight + arc:
+        # Right semicircle (top to bottom, clockwise)
+        frac = (s_dist - straight) / arc
+        ang  = math.pi / 2 - math.pi * frac
+        x    =  cx_off + ry * math.cos(ang)
+        y    =           ry * math.sin(ang)
+    elif s_dist < 2 * straight + arc:
+        # Bottom straight (right to left)
+        frac = (s_dist - straight - arc) / straight
+        x    = cx_off - frac * 2 * cx_off
+        y    = -ry
+    else:
+        # Left semicircle (bottom to top, clockwise)
+        frac = (s_dist - 2 * straight - arc) / arc
+        ang  = -math.pi / 2 + math.pi * frac
+        x    = -cx_off + ry * math.cos(ang)
+        y    =           ry * math.sin(ang)
+
+    return np.array([float(x), float(y), 0.0])
 
 
 def snow_walk(t):
@@ -1299,6 +1360,135 @@ def _lamp_post(phys, x, y, pole_h=3.6, head_r=0.22,
     p.createMultiBody(0, hcol, hvis, [x + 0.87, y, pole_h], physicsClientId=phys)
 
 
+def build_stadium_environment(phys):
+    """Athletics stadium — tartan track, grass infield, tiered stands, floodlights, scoreboard."""
+    # ── Ground: green infield ─────────────────────────────────────────────────
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.18, 0.55, 0.22, 1.0],
+                        physicsClientId=phys)
+
+    obstacles = []
+
+    # ── Running track: tartan red oval (flat ring) ────────────────────────────
+    n_seg = 48
+    for si in range(n_seg):
+        a0 = si * 2 * math.pi / n_seg
+        a1 = (si + 1) * 2 * math.pi / n_seg
+        am = (a0 + a1) / 2
+        # Track midline at slightly larger oval than the walk path
+        rx_t, ry_t = STADIUM_TRACK_RX + 1.2, STADIUM_TRACK_RY + 1.2
+        # Superellipse midpoint
+        cx = rx_t * math.copysign(abs(math.cos(am)) ** 0.125, math.cos(am))
+        cy = ry_t * math.copysign(abs(math.sin(am)) ** 0.125, math.sin(am))
+        seg_len = math.hypot(
+            rx_t * math.copysign(abs(math.cos(a1)) ** 0.125, math.cos(a1)) - cx,
+            ry_t * math.copysign(abs(math.sin(a1)) ** 0.125, math.sin(a1)) - cy,
+        ) * 2
+        rot_q = p.getQuaternionFromEuler([0, 0, am])
+        _vbox(phys, [max(seg_len / 2, 0.3), 1.3, 0.020],
+              [cx, cy, 0.020], [0.72, 0.18, 0.10, 1.0], rot_q)
+
+    # Inner edge white line
+    for si in range(n_seg):
+        am = si * 2 * math.pi / n_seg
+        cx = STADIUM_TRACK_RX * math.copysign(abs(math.cos(am)) ** 0.125, math.cos(am))
+        cy = STADIUM_TRACK_RY * math.copysign(abs(math.sin(am)) ** 0.125, math.sin(am))
+        _vbox(phys, [0.5, 0.05, 0.025], [cx, cy, 0.025],
+              [0.95, 0.95, 0.95, 0.9])
+
+    # ── Tiered spectator stands ───────────────────────────────────────────────
+    stand_specs = [
+        # (cx, cy, half_w, half_d, angle, colour)
+        ( 0.0,  8.5, 9.5, 1.8, 0,           [0.55, 0.55, 0.58, 1.0]),  # North
+        ( 0.0, -8.5, 9.5, 1.8, math.pi,     [0.55, 0.55, 0.58, 1.0]),  # South
+        ( 11.0,  0.0, 1.8, 5.5, math.pi/2,  [0.52, 0.52, 0.55, 1.0]),  # East
+        (-11.0,  0.0, 1.8, 5.5, math.pi/2,  [0.52, 0.52, 0.55, 1.0]),  # West
+    ]
+    for cx, cy, hw, hd, rot, rgba in stand_specs:
+        q = p.getQuaternionFromEuler([0, 0, rot])
+        # Three tiers
+        for tier in range(3):
+            th = 0.6 + tier * 0.55
+            td = hd - tier * 0.4
+            offset_d = tier * 0.45
+            col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[hw, td, th],
+                                          physicsClientId=phys)
+            vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[hw, td, th],
+                                       rgbaColor=rgba, physicsClientId=phys)
+            body = p.createMultiBody(0, col, vis, [cx, cy, th], physicsClientId=phys)
+            if tier == 0:
+                obstacles.append({"id": body, "radius": max(hw, hd) + 0.5,
+                                   "position": np.array([cx, cy], dtype=float)})
+            # Seat rows (coloured stripes — red / blue / yellow)
+            seat_cols = [[0.85, 0.12, 0.12, 1.0], [0.15, 0.35, 0.72, 1.0],
+                          [0.92, 0.78, 0.08, 1.0]]
+            for ri in range(4):
+                _vbox(phys, [hw - 0.1, 0.08, 0.04],
+                      [cx, cy, tier * 1.1 + ri * 0.28 + 0.1],
+                      seat_cols[ri % 3])
+
+    # ── Finish line ───────────────────────────────────────────────────────────
+    _vbox(phys, [0.05, 1.5, 0.025], [STADIUM_TRACK_RX + 0.2, 0.0, 0.025],
+          [0.95, 0.95, 0.95, 1.0])
+    # Start/finish text implied by two coloured markers
+    _vbox(phys, [0.04, 0.4, 0.025], [STADIUM_TRACK_RX + 0.2, -0.6, 0.025],
+          [1.0, 0.85, 0.05, 1.0])
+    _vbox(phys, [0.04, 0.4, 0.025], [STADIUM_TRACK_RX + 0.2,  0.6, 0.025],
+          [1.0, 0.85, 0.05, 1.0])
+
+    # ── Four floodlight towers ────────────────────────────────────────────────
+    for lx, ly in [(12.5, 7.5), (-12.5, 7.5), (12.5, -7.5), (-12.5, -7.5)]:
+        # Main mast
+        _vcyl(phys, 0.18, 12.0, [lx, ly, 6.0], [0.75, 0.75, 0.78, 1.0])
+        # Lamp bar
+        _vbox(phys, [1.6, 0.12, 0.12], [lx, ly, 12.2], [0.72, 0.72, 0.74, 1.0])
+        # Lamp heads (8 bright panels)
+        for li in range(4):
+            for lj in range(2):
+                lx_off = (li - 1.5) * 0.75
+                _vbox(phys, [0.28, 0.06, 0.22],
+                      [lx + lx_off, ly + (lj * 0.35 - 0.18), 12.2],
+                      [1.0, 0.98, 0.90, 1.0])
+
+    # ── Electronic scoreboard ─────────────────────────────────────────────────
+    for sb_x in (0.0,):
+        _vbox(phys, [3.5, 0.18, 1.4], [sb_x, -10.5, 4.2], [0.08, 0.08, 0.08, 1.0])
+        _vbox(phys, [3.2, 0.08, 1.1], [sb_x, -10.3, 4.2], [0.05, 0.18, 0.05, 1.0])
+        # Dot matrix "pixels"
+        for pi in range(8):
+            for pj in range(3):
+                _vsph(phys, 0.08,
+                      [sb_x - 2.8 + pi * 0.8, -10.22, 3.60 + pj * 0.42],
+                      [0.10, 0.95, 0.10, 1.0])
+        # Support pylons
+        for px_off in (-3.0, 3.0):
+            _vcyl(phys, 0.15, 3.0, [sb_x + px_off, -10.5, 1.5],
+                  [0.55, 0.55, 0.58, 1.0])
+
+    # ── Long-jump sandpit ─────────────────────────────────────────────────────
+    _vbox(phys, [1.5, 0.55, 0.04], [-6.0, 7.0, 0.04], [0.92, 0.85, 0.65, 1.0])
+    _vbox(phys, [1.5, 0.06, 0.08], [-6.0, 7.6, 0.08], [0.65, 0.55, 0.38, 1.0])
+    _vbox(phys, [1.5, 0.06, 0.08], [-6.0, 6.4, 0.08], [0.65, 0.55, 0.38, 1.0])
+
+    # ── High-jump mat ─────────────────────────────────────────────────────────
+    _vbox(phys, [1.2, 0.80, 0.35], [5.0, 7.0, 0.35], [0.15, 0.35, 0.72, 0.85])
+    # Bar support poles
+    for bx in (4.0, 6.0):
+        _vcyl(phys, 0.04, 1.40, [bx, 7.0, 0.70], [0.80, 0.80, 0.82, 1.0])
+    _vbox(phys, [1.0, 0.015, 0.015], [5.0, 7.0, 1.30], [0.80, 0.25, 0.10, 1.0])
+
+    # ── Infield hurdles stored at the side ────────────────────────────────────
+    for hi in range(5):
+        hx = -4.0 + hi * 1.5
+        _vbox(phys, [0.50, 0.04, 0.42], [hx, -7.0, 0.42], [0.88, 0.88, 0.88, 1.0])
+        _vbox(phys, [0.04, 0.04, 0.42], [hx - 0.46, -7.0, 0.42],
+              [0.88, 0.88, 0.88, 1.0])
+        _vbox(phys, [0.04, 0.04, 0.42], [hx + 0.46, -7.0, 0.42],
+              [0.88, 0.88, 0.88, 1.0])
+
+    return obstacles
+
+
 def build_snow_environment(phys):
     """Snow-covered winter field — white ground, pine trees, frozen pond, snowmen, fences."""
     plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
@@ -1682,23 +1872,27 @@ def build_vineyard_environment(phys):
                                    "radius": VINEYARD_POST_R + 0.6,
                                    "position": np.array([px, ry], dtype=float)})
 
-            # Dense vine canopy blob (irregular green shape)
-            for bi in range(3):
-                bx = px + (bi - 1) * 0.30
-                bz = VINEYARD_WIRE_H + 0.15 + bi * 0.12
-                fol_r = 0.42 - abs(bi - 1) * 0.08
-                _vsph(phys, fol_r, [bx, ry, bz], [0.15 + bi * 0.05,
-                      0.50 + bi * 0.06, 0.12, 0.95])
+            # Dense vine canopy — skip centre row (ry==0) so the overhead camera
+            # has a clear view of the person's red marker without foliage occlusion.
+            if ry != 0.0:
+                for bi in range(3):
+                    bx = px + (bi - 1) * 0.30
+                    bz = VINEYARD_WIRE_H + 0.15 + bi * 0.12
+                    fol_r = 0.42 - abs(bi - 1) * 0.08
+                    _vsph(phys, fol_r, [bx, ry, bz], [0.15 + bi * 0.05,
+                          0.50 + bi * 0.06, 0.12, 0.95])
 
-            # Grape clusters hanging below canopy
+            # Grape clusters — on all rows, but shorter stems on centre row so
+            # they don't poke into the camera view from z ≈ 1.6 m
             for gi in range(2):
                 gx = px + (gi - 0.5) * 0.55
                 gcol = grape_colors[(pi + gi) % len(grape_colors)]
+                drop = 0.10 if ry == 0.0 else 0.20   # less drooping on centre row
                 for gbi in range(4):
                     _vsph(phys, 0.055,
                           [gx + (gbi % 2) * 0.07,
                            ry + (gbi // 2) * 0.07,
-                           VINEYARD_WIRE_H - 0.20 - gbi * 0.06],
+                           VINEYARD_WIRE_H - drop - gbi * 0.06],
                           gcol)
 
         # Wire segments at three heights
@@ -2292,6 +2486,8 @@ def build_environment(phys, scenario):
         return build_vineyard_environment(phys)
     if scenario == SCENARIO_SNOW:
         return build_snow_environment(phys)
+    if scenario == SCENARIO_STADIUM:
+        return build_stadium_environment(phys)
     return build_park_environment(phys)
 
 
@@ -2316,6 +2512,8 @@ def scenario_user_position(scenario, t_wall):
         return vineyard_walk(t_wall)
     if scenario == SCENARIO_SNOW:
         return snow_walk(t_wall)
+    if scenario == SCENARIO_STADIUM:
+        return stadium_walk(t_wall)
     return figure8(t_wall * USER_WALK_SPEED)
 
 
@@ -7232,6 +7430,12 @@ def run(
                 cameraTargetPosition=[0, 0, 1.0],
                 physicsClientId=phys,
             )
+        elif scenario == SCENARIO_STADIUM:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=22.0, cameraYaw=30, cameraPitch=-35,
+                cameraTargetPosition=[0, 0, 2.0],
+                physicsClientId=phys,
+            )
         else:
             p.resetDebugVisualizerCamera(
                 cameraDistance=11, cameraYaw=30, cameraPitch=-27,
@@ -7617,6 +7821,13 @@ def run(
                 gust_dir = 0.4 * t_wall + 1.5 * math.sin(0.07 * t_wall)
                 force[0] += math.cos(gust_dir) * snow_wind
                 force[1] += math.sin(gust_dir) * snow_wind
+            if scenario == SCENARIO_STADIUM:
+                # Gentle ambient wind — open stadium with light breeze
+                stad_gust = STADIUM_WIND * WIND_FORCE_SCALE * (
+                    1.0 + 0.3 * math.sin(0.13 * t_wall))
+                stad_dir  = 0.5 * t_wall
+                force[0] += math.cos(stad_dir) * stad_gust
+                force[1] += math.sin(stad_dir) * stad_gust
             avoidance_for_display = avoidance.copy()
 
             for _ in range(STEPS_PER_ACTION):

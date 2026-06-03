@@ -109,6 +109,21 @@ SCENARIOS = {
             "Open sky means tracker lock should be high — baseline check",
         ],
     },
+    "stadium": {
+        "label": "Stadium",
+        "description": (
+            "A full athletics stadium with an oval tartan track, tiered stands, "
+            "four floodlight towers, an electronic scoreboard, and infield equipment "
+            "(long-jump pit, high-jump mat, hurdles). The athlete jogs a lap of the "
+            "400 m oval at a steady pace — testing whether the PPO circular-walk "
+            "training mode generalises to a real curved trajectory."
+        ),
+        "challenges": [
+            "Circular walk at 0.08 rad/s exercises the circular curriculum mode",
+            "Open sky — tracker lock should be near-perfect; any loss flags a regression",
+            "Light ambient wind + changing heading tests hover in low-wind curved flight",
+        ],
+    },
     "snow": {
         "label": "Snowy Field",
         "description": (

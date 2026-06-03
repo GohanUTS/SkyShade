@@ -39,6 +39,23 @@ MAX_ITERATIONS = 10_000
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _make_tb_writer():
+    """Create a TensorBoard writer for the MDP solve run, or return None."""
+    try:
+        import time
+        from torch.utils.tensorboard import SummaryWriter
+        _ts  = time.strftime("%Y%m%d_%H%M%S")
+        _dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "runs", "mdp_solver", _ts)
+        os.makedirs(_dir, exist_ok=True)
+        logdir = os.path.abspath(os.path.join(_dir, ".."))
+        print(f"\n  \033[36m[TensorBoard]\033[0m  tensorboard --logdir {logdir}"
+              f"\n  Logging MDP convergence → {_dir}\n")
+        return SummaryWriter(_dir)
+    except Exception:
+        return None
+
+
 def value_iteration(T, R, gamma: float):
     """
     Standard synchronous value iteration.
@@ -47,9 +64,13 @@ def value_iteration(T, R, gamma: float):
       V      : value function, shape (N_STATES,)
       policy : greedy policy, shape (N_STATES,) int
       deltas : Bellman delta per iteration (for convergence plot)
+
+    Also streams per-iteration metrics to TensorBoard so the convergence
+    curve updates live while the solver runs.
     """
     V = np.zeros(N_STATES + 1, dtype=float)  # +1 for TERMINAL absorbing state
     deltas = []
+    tb = _make_tb_writer()
 
     for iteration in range(MAX_ITERATIONS):
         V_new = V.copy()
@@ -67,11 +88,23 @@ def value_iteration(T, R, gamma: float):
         deltas.append(delta)
         V = V_new
 
+        # Log to TensorBoard every iteration so the curve is visible live
+        if tb is not None:
+            tb.add_scalar("mdp/bellman_delta",     delta,       iteration)
+            tb.add_scalar("mdp/log10_bellman_delta",
+                          float(np.log10(max(delta, 1e-12))),   iteration)
+            tb.add_scalar("mdp/mean_value",        float(np.mean(V[:N_STATES])), iteration)
+            tb.add_scalar("mdp/max_value",         float(np.max(V[:N_STATES])), iteration)
+
         if delta < CONVERGENCE_DELTA:
             print(f"Converged after {iteration + 1} iterations  (Δ={delta:.2e})")
             break
     else:
         print(f"WARNING: did not converge after {MAX_ITERATIONS} iterations.")
+
+    if tb is not None:
+        tb.flush()
+        tb.close()
 
     # Extract greedy policy
     policy = np.zeros(N_STATES, dtype=int)
