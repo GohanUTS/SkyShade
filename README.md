@@ -9,61 +9,61 @@
 
 ---
 
-## Quick Start (no setup needed — models are included)
+## Quick Start
 
 ```bash
 git clone https://github.com/GohanUTS/SkyShade.git
 cd SkyShade
 pip install -r requirements.txt
-python3 run_sim.py                        # launcher GUI
-python3 run_sim.py --scenario snow        # jump straight to a scene
-python3 run_sim.py --no-gui --scenario park --duration 120   # headless
+python3 run_sim.py            # opens the launcher GUI
 ```
 
-> All trained models ship in `models/`. No retraining is required to run.
+All trained models are included — no retraining required to run.
 
 ---
 
 ## Scenarios
 
-Ten simulation worlds, each with detailed hand-crafted environments and a different challenge for the AI stack:
+Ten hand-crafted simulation worlds, each stressing a different part of the AI stack:
 
-| Key | Name | What makes it hard |
-|---|---|---|
-| `park` | Park | Baseline — open flat loop, figure-8 walk |
-| `forest` | Forest Trail | Tree canopy occludes tracker; hover under noisy position signal |
-| `buildings` | Building District | City blocks, cars, pedestrians; nav avoids building near-misses |
-| `trail` | Urban Trail | Crowd distractors + bridge shadow drop tracker confidence |
-| `night` | Night Park | Low-light HSV tracking; fountain, benches, flower beds, streetlamps |
-| `rooftop` | Rooftop | Constant 3–8 m/s wind; HVAC units, solar panels, water tower, satellite dish |
-| `beach` | Coastal Beach | Lateral sea-breeze; lifeguard tower, palm trees, ocean, volleyball net |
-| `parking` | Parking Lot | Detailed cars with cabins/wheels/lights; store building; constant-speed aisle walk |
-| `vineyard` | Vineyard | Rhythmic vine-post occlusion; farmhouse, grape clusters, irrigation pipes |
-| `snow` | Snowy Field | Omnidirectional gusting wind; frozen pond, pine trees, snowmen, wooden fence |
+| Key | Name | Environment | Challenge |
+|---|---|---|---|
+| `park` | Park | Grass loop, trees, path tiles | Baseline hover and tracking |
+| `forest` | Forest Trail | Dense canopy, winding dirt trail | Tree occlusion drops tracker confidence |
+| `buildings` | Building District | City plaza, tall buildings, vehicles, pedestrians | Nav must avoid building near-misses |
+| `trail` | Urban Trail | Bridge/underpass, crowd pedestrians | Crowd distractors + shadow confuse tracker |
+| `night` | Night Park | Fountain, benches, flower beds, streetlamps | Low-light shadow HSV band engaged |
+| `rooftop` | Rooftop | Parapet walls, HVAC, solar panels, water tower | Constant 3–8 m/s wind; confined edges |
+| `beach` | Coastal Beach | Ocean, lifeguard tower, palm trees, volleyball | Steady lateral sea-breeze crosswind |
+| `parking` | Parking Lot | Detailed cars, store building, lamp posts | Rectangular box obstacles, aisle navigation |
+| `vineyard` | Vineyard | Vine trellis rows, grape clusters, farmhouse | Rhythmic post occlusion; tight nav corridors |
+| `snow` | Snowy Field | Frozen pond, pine trees, snowmen, wooden fence | Omnidirectional gusting wind; cold overcast |
 
 ---
 
 ## How to Run
 
-### GUI launcher
+### Launcher (GUI)
+
 ```bash
 python3 run_sim.py
 ```
-Opens the SkyShade Launcher. Pick a scenario, configure duration, and click **Select → Launch**. The scrollable scenario list shows all nine worlds. After each run a Post-Run Efficiency Report pops up with per-subsystem grades and a trend chart over the last 20 runs.
 
-### CLI (headless or windowed)
+Opens the SkyShade Launcher. The right panel shows all ten scenarios in a scrollable list — pick one, set the duration, and click **Select → Launch**. After each run a **Post-Run Efficiency Report** shows per-subsystem grades (A–D) and a trend chart over the last 20 runs.
+
+### Command line
+
 ```bash
-# All scenarios, all options
-python3 run_sim.py --scenario <key> --duration 120 --flight ppo
-python3 run_sim.py --no-gui   --scenario forest --duration 120
-
-# Stress-test low battery
-python3 run_sim.py --demo-low-battery --scenario buildings
+python3 run_sim.py --scenario snow               # specific scene, GUI
+python3 run_sim.py --scenario forest --no-gui    # headless (no 3-D window)
+python3 run_sim.py --scenario buildings --duration 180
+python3 run_sim.py --demo-low-battery --scenario trail   # stress-test battery
 ```
 
-### Performance report
+### Per-scenario performance report
+
 ```bash
-python3 scenario_report.py           # coloured terminal report
+python3 scenario_report.py           # coloured terminal breakdown
 python3 scenario_report.py --json    # machine-readable JSON
 ```
 
@@ -71,106 +71,130 @@ python3 scenario_report.py --json    # machine-readable JSON
 
 ## System Architecture
 
+Four AI subsystems run together inside a single PyBullet physics simulation:
+
 ```
-Camera (PyBullet virtual, downward-facing)
+  Downward camera (PyBullet virtual)
            │
     ┌──────▼──────┐
-    │   Sub-1     │  HSV marker tracker → position + confidence
-    │  Perception │  Shadow-tolerant band · EMA smoothing
-    └──────┬──────┘
-           │ user position (dx, dy, dz)
-    ┌──────▼──────┐     wind force
-    │   Sub-2     │◄────────────────── Weather controller
-    │   Flight    │  PPO hover policy (12.8M steps)
-    │  (PPO+PID)  │  Curriculum: stationary → wind → multi-walk
-    └──────┬──────┘
-           │ force setpoint
-    ┌──────▼──────┐
-    │  PyBullet   │  Physics (drone + scene)
+    │   SUB-1     │  HSV colour tracker → user position (dx, dy, dz)
+    │ Perception  │  + tracking confidence [0–1]
     └──────┬──────┘
            │
-    ┌──────▼──────┐     ┌─────────────┐     ┌─────────────┐
-    │   Sub-3     │     │   Sub-4     │     │   Sub-4     │
-    │  Weather    │     │  Nav SAC    │     │  Battery    │
-    │  SVM + hyst │     │ obstacle av │     │  MDP table  │
-    └─────────────┘     └─────────────┘     └─────────────┘
-    umbrella cmd        avoidance force      CONTINUE/RTH/LAND
+    ┌──────▼──────┐   ← wind force from weather controller
+    │   SUB-2     │
+    │   Flight    │  PPO hover policy — learns to stay above the user
+    │  (PPO+PID)  │  despite wind, movement, and position noise
+    └──────┬──────┘
+           │ corrective force
+    ┌──────▼──────┐
+    │  PyBullet   │  Physics engine (drone body, obstacles, terrain)
+    └──────┬──────┘
+           │
+   ┌───────┴──────────────┐
+   │                      │
+ ┌─▼──────────┐    ┌──────▼──────────────────┐
+ │   SUB-3    │    │        SUB-4             │
+ │  Weather   │    │  Navigation & Safety     │
+ │  SVM+hyst  │    │  SAC obstacle-avoidance  │
+ │            │    │  + Battery MDP (RTH/Land) │
+ └────────────┘    └──────────────────────────┘
+ DEPLOY / STOW      avoidance force + override cmd
 ```
 
 ---
 
 ## Subsystems
 
-### Sub-1 — Perception (`sub1_perception/tracker.py`)
+### Sub-1 — Perception
 
-HSV colour tracker with multiple improvements for challenging environments:
+**File:** `sub1_perception/tracker.py`
 
-- **Primary band** — well-lit conditions (Value ≥ 55)
-- **Shadow fallback band** — bridge / forest canopy shadow (Value 30–80, Sat ≥ 80); fires only if primary misses, avoiding false positives
-- **EMA confidence smoothing** (α = 0.35) — damps single-frame dips from partial occlusion
-- **Extended occlusion hold** — 35 frames before declaring lock lost (was 20)
-- **Velocity-biased gimbal search** — when lock is lost, 65% of the search sweep biases toward the target's last velocity direction; recovers faster on linear-path scenarios
-- **Reduced confidence saturation area** — 250 px² (was 500); distant/partial blobs score higher
+A stateful HSV colour tracker that isolates the user's red marker in every camera frame and outputs a 3-D body-frame position offset plus a confidence score [0–1].
 
-Result: Urban Trail lock improved 58% → 84% from session start.
+Key improvements made during development:
 
-### Sub-2 — Flight Control (`sub2_flight/`)
+| Feature | Detail |
+|---|---|
+| Shadow fallback HSV band | Value 30–80 catches the marker under bridges and forest canopy |
+| EMA confidence smoothing | α = 0.35 damps single-frame dips from partial occlusion |
+| Extended occlusion hold | 35 frames before declaring lock lost (up from 20) |
+| Reduced saturation area | 250 px² (down from 500) — distant/partial blobs score higher |
+| Velocity-biased gimbal search | On lock-loss, 65% of the search sweeps toward the target's last velocity |
 
-PPO (Proximal Policy Optimisation) hover policy with a 3-stage curriculum:
+These improvements took Urban Trail tracker lock from **58% → 84%** over the course of development.
 
-| Stage | Condition | Steps |
-|---|---|---|
-| 1 | Stationary target, no wind | 0 – 500k |
-| 2 | Stationary target, gusty wind (0–4.5 m/s) | 500k – 1M |
-| 3 | Moving target, gusty wind | 1M+ |
+### Sub-2 — Flight Control
 
-**Stage 3 walk diversity** — three modes sampled each episode so the policy generalises across all scenario walk patterns:
-- *Random* (40%) — ±0.2 m random steps (legacy)
-- *Linear* (35%) — constant-velocity directional walk (0.08–0.18 m/s) — matches forest/trail/beach
-- *Circular* (25%) — orbit at randomised radius and speed — matches park figure-8
+**Files:** `sub2_flight/`
 
-> **Training note:** `_OBS_NOISE = {1: 0.0, 2: 0.0, 3: 0.0}` — observation noise is permanently disabled. Any noise in warm-start training causes catastrophic forgetting of clean hovering. Warm-start params: LR = 3e-5, clip = 0.08.
+A **PPO (Proximal Policy Optimisation)** policy that outputs 3-axis velocity setpoints; an inner proportional controller converts these to forces applied in PyBullet.
 
-Current model: **12.8M steps**
+#### Curriculum
 
-### Sub-3 — Environmental Decision (`sub3_env/`)
+| Stage | Target | Wind | When |
+|---|---|---|---|
+| 1 | Stationary | None | Steps 0 – 500k |
+| 2 | Stationary | Gusty (0–4.5 m/s) | Steps 500k – 1M |
+| 3 | Moving | Gusty | Steps 1M+ |
 
-RBF SVM classifier (sklearn Pipeline: StandardScaler + SVC) that outputs DEPLOY/STOW for the umbrella canopy.
+#### Stage 3 walk diversity
 
-- **Input:** 9-D feature vector — lux, rain, wind + their deltas + 3 prior actions
-- **Training data:** 189 labelled samples (`data/env_sensor_log.csv`) covering sun, rain, grey-zone, high-wind, and shadow conditions
-- **CV accuracy:** 92.1% (10-fold stratified)
-- **Hyperparameters:** C = 5.0, γ = 0.1, class_weight = balanced
-- **Hysteresis filter:** decision only flips after 3 consecutive matching predictions
+Each episode randomly samples one of three movement patterns so the policy generalises across all ten scenario walk styles:
 
-Retrain:
+- **Random** (40%) — ±0.2 m random jumps every 20 steps
+- **Linear** (35%) — constant-velocity directional walk, 0.08–0.18 m/s
+- **Circular** (25%) — slow orbit at randomised radius and angular speed
+
+#### Current model: 12.8M steps
+
+> **Important for retraining:** observation noise must remain **zero** (`_OBS_NOISE = {1: 0.0, 2: 0.0, 3: 0.0}` in `sub2_flight/env/ppo_hover_env.py`). Any noise added during warm-start training causes the policy to overfit to the noisy environment and perform poorly on the clean real simulator. Keep warm-start LR = 3e-5, clip = 0.08, and max 1.5M steps per run.
+
+### Sub-3 — Environmental Decision
+
+**Files:** `sub3_env/`
+
+An **RBF SVM** classifier (scikit-learn Pipeline: StandardScaler → SVC) that decides every second whether to DEPLOY or STOW the umbrella canopy.
+
+| Parameter | Value |
+|---|---|
+| Input features | 9-D: lux, rain, wind + their frame-to-frame deltas + 3 prior actions |
+| Training samples | 189 labelled readings covering sun, rain, grey-zone, high-wind, shadow |
+| Cross-validation accuracy | 92.1% (10-fold stratified) |
+| Hyperparameters | C = 5.0, γ = 0.1, class_weight = balanced |
+| Hysteresis | Decision only flips after 3 consecutive matching predictions |
+
+To retrain:
 ```bash
 python3 sub3_env/train_svm.py --data data/env_sensor_log.csv --output models/svm_v1.pkl
 ```
 
-### Sub-4 — Navigation and Safety (`sub4_nav/`)
+### Sub-4 — Navigation and Safety
 
-Two independent components:
+**Files:** `sub4_nav/`
 
-**Battery MDP** (`policy_table_v1.npy`) — offline value-iteration over a (battery × distance) state space. Returns CONTINUE / RTH / LAND_NOW. RTH is suppressed while battery > 50% so the drone keeps following.
+Two independent components that run in parallel:
 
-**Obstacle-avoidance SAC** (`ppo_nav_v1.zip`, filename legacy) — Soft Actor-Critic learns to navigate a 10×8 m obstacle room from lidar rays. Obstacle layouts are scenario-specific (park, forest, buildings, trail, parking, beach/rooftop/night).
+**Obstacle-avoidance SAC** — a Soft Actor-Critic policy trained in a 10×8 m obstacle room with 8 lidar rays. Produces a lateral avoidance force that steers the drone around obstacles in real time. The obstacle layout used during training is scenario-specific.
 
-Current SAC model: **~512k steps, 72% efficiency**
+- Current model: **~512k steps, 72% efficiency**
+- Algorithm: SAC (off-policy, sample-efficient; no curriculum needed)
 
-Retrain SAC:
+**Battery-safety MDP** — a pre-computed value-iteration policy over a discrete (battery level × distance-to-home) state space. Returns one of: CONTINUE / RTH (Return to Home) / LAND_NOW. RTH is suppressed while battery > 50% so the drone keeps following; it activates only when battery drops low.
+
+To retrain SAC:
 ```bash
 python3 train_sub4.py --steps 200000 --scenario buildings
 ```
 
 ---
 
-## Headless Training Scripts
+## Training Scripts
 
-Both scripts warm-start from the existing saved model and use conservative hyperparameters.
+Headless scripts that warm-start from the existing saved models:
 
 ```bash
-# Sub-2 PPO — do NOT add --steps beyond 1.5M per run
+# Sub-2 PPO  — do NOT exceed 1.5M steps per warm-start run
 python3 train_sub2.py --steps 1500000
 
 # Sub-4 Nav SAC
@@ -179,17 +203,16 @@ python3 train_sub4.py --steps 200000 --scenario parking
 
 ---
 
-## Models (`models/`)
+## Trained Models
 
-All models are committed to git and ship ready-to-use:
+All models are committed to the repository and load automatically on launch:
 
-| File | Algorithm | Steps / Samples | Notes |
+| File | Algorithm | Size | Description |
 |---|---|---|---|
-| `ppo_flight_v1.zip` | PPO | 12.8M | Sub-2 hover; zero obs noise |
-| `ppo_nav_v1.zip` | SAC | ~512k | Sub-4 nav (legacy filename) |
-| `svm_v1.pkl` | RBF SVM | 189 samples | Sub-3 umbrella, CV 92.1% |
-| `policy_table_v1.npy` | MDP (value iter.) | — | Sub-4 battery safety |
-| `qtable_v1.npy` | Q-table | — | Sub-2 legacy fallback |
+| `models/ppo_flight_v1.zip` | PPO | 12.8M steps | Sub-2 hover policy |
+| `models/ppo_nav_v1.zip` | SAC | ~512k steps | Sub-4 obstacle-avoidance nav |
+| `models/svm_v1.pkl` | RBF SVM | 189 samples | Sub-3 umbrella deploy/stow |
+| `models/policy_table_v1.npy` | MDP value iteration | — | Sub-4 battery safety |
 
 ---
 
@@ -197,72 +220,59 @@ All models are committed to git and ship ready-to-use:
 
 ```
 SkyShade/
-├── run_sim.py              # Main integrated simulation (launcher + sim loop)
-├── scenario_report.py      # Per-scenario performance analysis
-├── train_sub2.py           # Headless PPO training
-├── train_sub4.py           # Headless SAC training
+├── run_sim.py              ← main simulation: launcher + physics loop + all 10 scenarios
+├── scenario_report.py      ← per-scenario performance analysis tool
+├── train_sub2.py           ← headless PPO training (Sub-2)
+├── train_sub4.py           ← headless SAC training (Sub-4)
 │
 ├── sub1_perception/
-│   ├── tracker.py          # HSV tracker with shadow band + EMA
-│   ├── distance_estimator.py
-│   └── training.py         # Calibration helper for the launcher
+│   ├── tracker.py              HSV tracker (shadow band, EMA, velocity-biased gimbal)
+│   ├── distance_estimator.py   Pinhole focal-length 3-D position estimator
+│   └── training.py             Live calibration helper used by the launcher GUI
 │
 ├── sub2_flight/
 │   ├── env/
-│   │   ├── hover_env.py        # PyBullet hover physics
-│   │   └── ppo_hover_env.py    # Gymnasium PPO env (multi-walk curriculum)
-│   ├── training_worker.py      # Background PPO thread (used by GUI)
-│   ├── runtime_control.py      # PPO/Q/PID flight controller wrappers
-│   └── policy.py
+│   │   ├── hover_env.py        PyBullet hover physics environment
+│   │   └── ppo_hover_env.py    Gymnasium wrapper with multi-walk curriculum
+│   ├── training_worker.py      Background PPO training thread (used by GUI)
+│   └── runtime_control.py      Flight controller wrapper (PPO velocity → force)
 │
 ├── sub3_env/
-│   ├── train_svm.py        # SVM training script
-│   ├── classifier.py       # Runtime SVM with hysteresis
-│   └── feature_engineering.py
+│   ├── train_svm.py            SVM training script
+│   ├── feature_engineering.py  9-D feature builder (deltas + action history)
+│   └── classifier.py           Runtime SVM with hysteresis filter
 │
 ├── sub4_nav/
-│   ├── mdp.py              # MDP definition
-│   ├── solve_mdp.py        # Value iteration solver
-│   ├── nav_training_worker.py  # SAC background thread
-│   ├── obstacle_env.py     # SAC gymnasium environment
-│   └── policy_table.py     # Runtime MDP lookup
+│   ├── mdp.py                  MDP state/action/reward definitions
+│   ├── solve_mdp.py            Offline value-iteration solver
+│   ├── nav_training_worker.py  Background SAC training thread (used by GUI)
+│   ├── obstacle_env.py         SAC lidar-based obstacle environment
+│   └── policy_table.py         Runtime battery-safety MDP lookup
 │
 ├── data/
-│   └── env_sensor_log.csv  # 189 labelled weather samples for SVM
+│   └── env_sensor_log.csv      189 labelled lux/rain/wind samples for SVM
 │
-├── models/                 # Trained artefacts (committed to git)
+├── models/                     ← trained artefacts, committed to git
 │   ├── ppo_flight_v1.zip
 │   ├── ppo_nav_v1.zip
 │   ├── svm_v1.pkl
-│   ├── policy_table_v1.npy
-│   └── qtable_v1.npy
+│   └── policy_table_v1.npy
 │
-└── reports/                # Auto-generated per-run JSON metrics
-    └── run_metrics_history.json
+└── reports/
+    └── run_metrics_history.json   last 20 run results (auto-generated)
 ```
 
 ---
 
-## Prerequisites
+## Installation
 
-```
-Python 3.10+
-pybullet
-stable-baselines3
-torch
-scikit-learn
-numpy
-opencv-python
-matplotlib
-tensorboard
-```
-
-Install:
 ```bash
 pip install -r requirements.txt
 ```
 
-> No GPU required. All training and inference runs on CPU.
+Key dependencies: `pybullet`, `stable-baselines3`, `torch`, `scikit-learn`, `numpy`, `opencv-python`, `matplotlib`
+
+No GPU required — all training and inference runs on CPU.
 
 ---
 
@@ -270,7 +280,8 @@ pip install -r requirements.txt
 
 | Problem | Fix |
 |---|---|
-| `ModuleNotFoundError: pybullet` | Run with `/usr/bin/python3` (system Python has pybullet), not the venv |
-| Forest hover very low (<30%) | Run `python3 train_sub2.py --steps 1500000` to recover the policy |
-| Launcher scenario list cut off | Scroll with mouse wheel — the list is scrollable |
-| Weather / rain not visible | Open the PyBullet 3D window — rain/wind draw there, not in the dashboard |
+| `ModuleNotFoundError: pybullet` | Run with `/usr/bin/python3` instead of the venv — system Python has pybullet installed |
+| Forest hover drops below 30% after training | Observation noise or LR was too high; run `python3 train_sub2.py --steps 1500000` to recover |
+| Launcher scenario list doesn't scroll | Use the mouse scroll wheel — the list is a scrollable canvas |
+| Rain / wind not visible in 3-D window | They render as PyBullet debug lines which only appear in the GUI window, not the dashboard camera feed |
+| Slow simulation | The `--no-gui` flag disables the PyBullet 3-D renderer and is significantly faster |
