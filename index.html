@@ -24,6 +24,47 @@
   <link rel="stylesheet" href="./static/css/index.css">
   <link rel="icon" href="./static/images/favicon.svg">
 
+  <style>
+    .team-grid {
+      margin-top: 1.5rem;
+    }
+
+    .team-card {
+      height: 100%;
+      padding: 1rem;
+      border: 1px solid #d6deea;
+      border-radius: 6px;
+      background: #fff;
+      text-align: center;
+    }
+
+    .team-photo,
+    .team-fallback {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border: 3px solid #60748f;
+      border-radius: 6px;
+      object-fit: cover;
+      object-position: center;
+      background: #eef3f8;
+    }
+
+    .team-fallback {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: #31445c;
+      font-size: 4rem;
+      font-weight: 700;
+    }
+
+    .team-name {
+      margin-top: 0.9rem;
+      margin-bottom: 0;
+      color: #222;
+    }
+  </style>
+
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
   <!-- FontAwesome loaded from CDN above -->
   <script src="./static/js/bulma-carousel.min.js"></script>
@@ -45,6 +86,7 @@
   <div class="navbar-menu">
     <div class="navbar-start" style="flex-grow: 1; justify-content: center;">
       <a class="navbar-item" href="#overview">Overview</a>
+      <a class="navbar-item" href="#team">Team</a>
       <a class="navbar-item" href="#architecture">Architecture</a>
       <a class="navbar-item" href="#running">Running</a>
       <a class="navbar-item" href="#subsystems">Subsystems</a>
@@ -183,6 +225,47 @@
             safety. Each subsystem can be developed and tested separately before
             being integrated into the full pipeline.
           </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="section" id="team">
+  <div class="container is-max-widescreen">
+    <h2 class="title is-3 has-text-centered">Team Members</h2>
+    <div class="columns is-multiline is-centered team-grid">
+      <div class="column is-one-quarter-desktop is-half-tablet">
+        <div class="team-card">
+          <img class="team-photo" src="./static/images/team/aaron.jpg" alt="Aaron"
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+          <div class="team-fallback" aria-hidden="true">A</div>
+          <h3 class="title is-5 team-name">Aaron</h3>
+        </div>
+      </div>
+      <div class="column is-one-quarter-desktop is-half-tablet">
+        <div class="team-card">
+          <img class="team-photo" src="./static/images/team/dinesh.png" alt="Dinesh"
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+          <div class="team-fallback" aria-hidden="true">D</div>
+          <h3 class="title is-5 team-name">Dinesh</h3>
+        </div>
+      </div>
+      <div class="column is-one-quarter-desktop is-half-tablet">
+        <div class="team-card">
+          <img class="team-photo" src="./static/images/team/saaranj.png" alt="Saaranj"
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+          <div class="team-fallback" aria-hidden="true">S</div>
+          <h3 class="title is-5 team-name">Saaranj</h3>
+        </div>
+      </div>
+      <div class="column is-one-quarter-desktop is-half-tablet">
+        <div class="team-card">
+          <img class="team-photo" src="./static/images/team/gohan.png" alt="Gohan"
+               onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+          <div class="team-fallback" aria-hidden="true">G</div>
+          <h3 class="title is-5 team-name">Gohan</h3>
         </div>
       </div>
     </div>
