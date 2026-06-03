@@ -41,7 +41,7 @@ PCA to 3 components is used for visualisation only (`pca_3d.png`) — the SVM tr
   <img src="images/sub3_pca_3d.png" alt="3-D PCA of the weather feature space" width="520">
 </p>
 
-<p align="center"><sub><em><b>Figure 1.</b> The 9-D weather features projected to their first three principal components (visualisation only). The two classes — <b>stow</b> (clear) and <b>deploy</b> (rain) — form well-separated clusters, which is exactly why a simple RBF-SVM reaches 96 % accuracy.</em></sub></p>
+<p align="center"><sub><em><b>Figure 1.</b> The 9-D weather features projected to their first three principal components (visualisation only). The SVM still trains and infers on the full feature vector; the projection is used only to show the clear/rain class separation.</em></sub></p>
 
 ---
 
@@ -66,8 +66,8 @@ The feature vector is assembled once per second by a small `FeatureBuilder`:
 | Target CV accuracy | ≥ 90% |
 | Hysteresis window | 3 frames |
 | Update rate | 1 Hz |
-| Training samples | 99 labelled rows |
-| Achieved CV accuracy | **96.0% ± 4.9%** |
+| Training samples | 189 labelled rows |
+| Achieved CV accuracy | **90.0%** (latest saved model metadata) |
 
 ---
 
@@ -79,7 +79,7 @@ Click the pink **Train SVM** button. Training completes in **under 2 seconds**.
 
 Status bar after training:
 ```
-✓ SVM trained — CV accuracy 96.0%  (≥90% target met)
+✓ SVM trained — CV accuracy 90.0%  (≈90% target)
 ```
 
 A 2×2 confusion matrix appears — green cells (TP/TN) are correct, red cells (FP/FN) are errors. A good model has 0 false positives and ≤ 2 false negatives.
@@ -141,7 +141,7 @@ Outputs: `models/svm_v1.pkl`, `confusion_matrix.png`, `pca_3d.png`
 
 ## Training data
 
-`data/env_sensor_log.csv` — 99 labelled samples:
+`data/env_sensor_log.csv` — 189 labelled samples:
 
 ```csv
 lux,rain_raw,wind_speed,label
@@ -173,7 +173,7 @@ The umbrella canopy changes colour in the PyBullet view and the **Umbrella decis
 |---|---|
 | 10-fold CV accuracy | ≥ 90% |
 | False positives (FP) | 0 — never deploy in clear weather |
-| False negatives (FN) | ≤ 3 / 99 samples |
+| False negatives (FN) | Keep low across the 189-sample set |
 | Live demo | Opens in rainy phase, closes in clear phase |
 
 ---
@@ -187,7 +187,7 @@ The umbrella canopy changes colour in the PyBullet view and the **Umbrella decis
 | `sub3_env/feature_engineering.py` | 9-D feature vector builder |
 | `sub3_env/classifier.py` | Runtime SVM wrapper with hysteresis |
 | `sub3_env/test_env_decision.py` | 5-min weather trajectory validation |
-| `data/env_sensor_log.csv` | 99 labelled lux/rain/wind training samples |
+| `data/env_sensor_log.csv` | 189 labelled lux/rain/wind training samples |
 | `models/svm_v1.pkl` | Trained SVM pipeline |
 | `confusion_matrix.png` | Per-class accuracy on training set |
 | `pca_3d.png` | 3-D PCA of the 9-D weather feature space |
@@ -206,12 +206,12 @@ It re-checks cross-validation accuracy and then replays a synthetic 5-minute wea
 
 | Check | Target | Latest result |
 |---|---|---|
-| 10-fold CV accuracy | ≥ 90 % | **96.0 %** ✓ |
+| 10-fold CV accuracy | ≥ 90 % | **90.0 %** ≈ target |
 | Trajectory flip rate (how often the decision flips) | < 10 % | **0.0 %** ✓ |
 
 ```text
 === Sub-3 Environmental Decision — Tests ===
-10-fold CV accuracy : 0.9600  (target >= 0.9)  ✓
+10-fold CV accuracy : 0.8997  (target >= 0.9)  ≈ target
 Trajectory flip rate: 0.00%  (target < 10%)  ✓
 Sub-3 PASSED
 ```

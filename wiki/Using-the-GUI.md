@@ -46,13 +46,21 @@ To train a specific subsystem only, click its coloured button:
 
 ### Right panel — Scenario
 
-Click one of the scenario cards to select the environment the drone will fly in:
+Click one of the scenario cards to select the environment the drone will fly in. The list is scrollable because the launcher now exposes all 11 worlds:
 
 | Scenario | Description |
 |---|---|
 | **Park** | Open park loop with light obstacles and a figure-8 walking path. Best for first runs. |
 | **Forest Trail** | Long wooded trail with tree avoidance and path reset. Tests obstacle avoidance. |
 | **Building District** | City block with buildings, roads, vehicles, and pedestrians. Most complex scenario. |
+| **Urban Trail** | Bridge/underpass with crowd pedestrians and tracker distractors. |
+| **Night Park** | Low-light streetlamp scene testing the shadow HSV band. |
+| **Rooftop** | Confined rooftop platform with parapets, clutter, and strong wind. |
+| **Coastal Beach** | Open beach with steady lateral sea breeze. |
+| **Parking Lot** | Vehicle rows and aisle navigation around box obstacles. |
+| **Vineyard** | Trellis rows with repeated post occlusion and tight corridors. |
+| **Snowy Field** | Snow, pines, frozen pond, snowmen, and gusty overcast conditions. |
+| **Stadium** | Oval track and a faster circular target in an athletics stadium. |
 
 The selected card is highlighted in blue.
 
@@ -166,6 +174,7 @@ A compact preview of the Sub-1 tracker calibration, including a mini camera view
 | Drone following the red sphere | Sub-2 PPO / PID working correctly |
 | Drone drifting sideways | Wind gust — should self-correct within 1–2 seconds if PPO is trained |
 | Umbrella disc turns green | Sub-3 detected rain or cloud → `DEPLOY` |
+| Building District user walks slowly toward buildings | The 120 s city visit path is active; this gives avoidance time to steer around walls |
 | Console: `Nav override: RTH` | Sub-4 MDP triggered return-to-home (low battery or far from home) |
 | Console: `Nav override: LAND_NOW` | Battery critical — drone descending |
 | Marker tracking chart drops | User occluded or confidence low — drone holds last known position |

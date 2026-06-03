@@ -117,7 +117,7 @@ python sub4_nav/test_nav_safety.py
 |---|---|---|---|
 | Sub-1 Perception | continuity / position MAE | > 70 % / < 0.15 m | **100 % / 0.081 m** ✓ |
 | Sub-2 Flight | mean reward / hover successes | > 150 / ≥ 9 of 10 | **+2666…+2705 / 10 of 10** ✓ |
-| Sub-3 Weather | 10-fold CV / flip rate | ≥ 90 % / < 10 % | **96.0 % / 0.0 %** ✓ |
+| Sub-3 Weather | 10-fold CV / flip rate | ≥ 90 % / < 10 % | **90.0 % / 0.0 %** ≈ target |
 | Sub-4 Nav Safety | scripted safety scenarios | 50 of 50 | **50 of 50** ✓ |
 
 ---
@@ -157,7 +157,7 @@ After training, the confusion matrix and CV accuracy are shown. ≥ 85% CV accur
   <img src="images/sub3_confusion_matrix.png" alt="SVM confusion matrix" width="440">
 </p>
 
-<p align="center"><sub><em><b>Figure 2.</b> Sub-3 SVM confusion matrix — a strong correct-prediction diagonal with zero false-deploys (the umbrella never opens in clear weather). 10-fold CV accuracy 96.0 %.</em></sub></p>
+<p align="center"><sub><em><b>Figure 2.</b> Sub-3 SVM confusion matrix — the key safety property is avoiding false deploys in clear weather. The latest saved 189-sample model sits at about 90.0 % 10-fold CV accuracy.</em></sub></p>
 
 ### Sub-4 Navigation / Safety
 

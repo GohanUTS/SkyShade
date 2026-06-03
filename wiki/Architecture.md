@@ -3,7 +3,7 @@
 ## System diagram
 
 <p align="center">
-  <img src="images/architecture.png" alt="SkyShade system architecture diagram" width="860">
+  <img src="images/architecture.png" alt="SkyShade system architecture diagram" width="1100">
 </p>
 
 <p align="center"><sub><em><b>Figure 1.</b> End-to-end data flow. The three <b>sensor inputs</b> (camera, weather, battery/pose) feed the four <b>AI subsystems</b>. Sub-1 hands a tracked target to Sub-2; Sub-4 can override Sub-2 for battery safety; Sub-3 drives the umbrella. All commands act on the <b>PyBullet world</b>, whose rendered camera view and state feed straight back to the sensors (dashed lines) — closing the loop every control tick.</em></sub></p>
@@ -20,7 +20,7 @@
 | Sub-4 Battery Safety | MDP value iteration | `models/policy_table_v1.npy` | <1 sec |
 | Sub-4 Nav (obstacle) | **SAC** (off-policy) | `models/ppo_nav_v1.zip` | 3D obstacle room (~1–3 min) |
 
-> **Note** — the nav model file keeps the legacy name `ppo_nav_v1.zip` for backward compatibility, but it now contains **SAC** weights, not PPO. Auto-Train can also train it on the **selected scenario's obstacle layout** (city / park / forest / trail) so the policy is tuned to the world it will fly in.
+> **Note** — the nav model file keeps the legacy name `ppo_nav_v1.zip` for backward compatibility, but it now contains **SAC** weights, not PPO. Auto-Train can also train it on the **selected scenario's obstacle layout** (city, park, forest, trail, parking, vineyard, stadium, or open-layout variants for beach/rooftop/night/snow) so the policy is tuned to the world it will fly in.
 
 ---
 
@@ -60,7 +60,7 @@ Before the sim can be launched, Sub-2 PPO and Sub-4 MDP must be trained. The lau
 |---|---|---|
 | Sub-1 Perception | PyBullet calibration room | Live camera feed, tracker bounding box, confidence chart |
 | Sub-2 Flight PPO | 3D hover arena (auto-rotating) | Quadcopter drone, wind arrows, reward curve with ETA |
-| Sub-4 Nav Safety | 3D obstacle room (auto-rotating) | Red cylinders, 8 lidar rays, live drone trail, reward curve |
+| Sub-4 Nav Safety | 3D obstacle room (auto-rotating) | Scenario-shaped obstacles, 8 lidar rays, live drone trail, reward curve |
 
 Each tab has a **Evaluate Model** button that runs 5 deterministic test episodes and draws the best episode's path as a green trail in the 3D view.
 
@@ -105,8 +105,8 @@ sub4_nav/
 ├── solve_mdp.py                CLI value-iteration solver
 ├── training_worker.py          Background MDP solver thread
 ├── policy_table.py             Runtime battery-safety lookup
-├── obstacle_env.py             10×8m room + 8 lidar rays + PPO gymnasium env
-├── nav_training_worker.py      Background PPO nav training thread (warm-start)
+├── obstacle_env.py             10×8m room + 8 lidar rays + scenario layouts
+├── nav_training_worker.py      Background SAC nav training thread (warm-start)
 └── eval_worker.py              5-episode nav evaluation worker
 
 ros2_ws/src/skyshade/skyshade/

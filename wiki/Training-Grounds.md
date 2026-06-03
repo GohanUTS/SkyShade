@@ -39,7 +39,7 @@ The hub window is titled **SkyShade — Training Grounds** and has four tabs alo
 | Stage | Subsystem | Steps | Time |
 |---|---|---|---|
 | 1 / 4 | Sub-2 Flight PPO | 100 000 | ~60 sec |
-| 2 / 4 | Sub-3 Weather SVM | 99 samples | ~3 sec |
+| 2 / 4 | Sub-3 Weather SVM | 189 samples | ~3 sec |
 | 3 / 4 | Sub-4 Battery MDP | value iteration | ~1 sec |
 | 4 / 4 | Sub-4 Nav SAC | 80 000 | ~50 sec |
 
@@ -89,6 +89,7 @@ A PyBullet room renders in real time. A **red sphere** moves along a Lissajous p
 - **Orange line** — pixel error in pixels (right axis)
 - **Orange dashed** — 18 px pass threshold
 - **Green shaded region** — frames where confidence is above threshold
+- **Chart key** — shown above the graph in two columns so it does not cover the live traces or the right-side pixel-error axis
 
 ### Status bar
 
@@ -256,7 +257,7 @@ The right panel has three sections, all updated every 200ms:
 | Bottom-left | Red | **Wrong stow** — it was raining but umbrella stayed closed (false negative) |
 | Bottom-right | Green | **Correct deploy** — it was raining, umbrella correctly opened |
 
-Below the matrix: `Accuracy: 96.0% ✓ passes 90% target` in green.
+Below the matrix: `Accuracy: 90.0% ≈ target` when the saved 189-sample model is loaded.
 
 ### Controls
 
@@ -264,14 +265,14 @@ Below the matrix: `Accuracy: 96.0% ✓ passes 90% target` in green.
 |---|---|---|
 | **🔄 Train / Retrain SVM** | Pink | Trains on `data/env_sensor_log.csv` every time — always from scratch, < 2 sec |
 
-> The SVM doesn't "improve" with more training runs — it always trains on the same 99-sample CSV and reaches the same ~96% accuracy. To improve accuracy, add more samples to `data/env_sensor_log.csv`.
+> The SVM doesn't "improve" with repeated identical runs — it retrains on the same 189-sample CSV and should land near the same ~90% cross-validation accuracy. To improve accuracy, add more labelled samples to `data/env_sensor_log.csv`.
 
 ### Status bar messages
 
 | Message | Meaning |
 |---|---|
 | `Training SVM on weather sensor data…` | Training in progress |
-| `✓ SVM trained — CV accuracy 96.0%  (≥90% target met)` | Training succeeded, model is good |
+| `✓ SVM trained — CV accuracy 90.0%  (≈90% target)` | Training succeeded near the target |
 | `○ NOT TRAINED — click Train / Retrain SVM` | Model file missing |
 
 ### There is no Evaluate button — validation is the live demo

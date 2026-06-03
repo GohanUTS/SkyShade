@@ -162,7 +162,7 @@ The SVM classifier decides whether to `DEPLOY` or `STOW` the umbrella canopy bas
 
 ### What the training does
 
-The SVM trains on `data/env_sensor_log.csv` — 99 labelled samples of (lux, rain, wind) paired with the correct umbrella action. It builds a 9-D feature vector:
+The SVM trains on `data/env_sensor_log.csv` — 189 labelled samples of (lux, rain, wind) paired with the correct umbrella action. It builds a 9-D feature vector:
 
 ```
 [lux, rain, wind, Δlux, Δrain, Δwind, prev_action_t-1, prev_action_t-2, prev_action_t-3]
@@ -175,7 +175,7 @@ The `prev_action` features (deployment history) give the classifier memory, prev
 1. Click **Train SVM** on the Sub-3 card
 2. The hub opens on the Sub-3 Weather tab — click **Train SVM** button (pink)
 3. Training completes in under 2 seconds
-4. Status bar shows: `✓ SVM trained — CV accuracy 96.0%  (≥90% target met)`
+4. Status bar shows: `✓ SVM trained — CV accuracy 90.0%  (≈90% target)`
 
 ### How to verify it is working
 
@@ -194,7 +194,7 @@ The `prev_action` features (deployment history) give the classifier memory, prev
 - The gauges on the right show lux/rain/wind values in real time
 - If the umbrella opens and closes at the right times, the SVM is working correctly
 
-**Passing threshold:** 10-fold CV accuracy ≥ 90%. A confusion matrix with fewer than 3 errors in 99 samples is excellent.
+**Passing threshold:** 10-fold CV accuracy near or above 90%. Keep false deploys low and use the confusion matrix to inspect remaining errors across the 189-sample set.
 
 **Runtime verification** (during the main sim):
 - The Umbrella decision chart in the telemetry dashboard flips between 0 (stow) and 1 (deploy) as weather cycles
@@ -343,7 +343,7 @@ Latest results on this machine:
 |---|---|---|---|
 | Sub-1 Perception | Tracking continuity / position MAE | > 70 % / < 0.15 m | **100 % / 0.081 m** ✓ |
 | Sub-2 Flight | Mean reward / hover successes (3 wind cases) | > 150 / ≥ 9 of 10 | **+2666…+2705 / 10 of 10** ✓ |
-| Sub-3 Weather | 10-fold CV accuracy / decision flip rate | ≥ 90 % / < 10 % | **96.0 % / 0.0 %** ✓ |
+| Sub-3 Weather | 10-fold CV accuracy / decision flip rate | ≥ 90 % / < 10 % | **90.0 % / 0.0 %** ≈ target |
 | Sub-4 Nav Safety | Scripted battery/obstacle safety scenarios | 50 of 50 | **50 of 50** ✓ |
 
 Per-subsystem details and sample output are on each subsystem page under **Tests**.

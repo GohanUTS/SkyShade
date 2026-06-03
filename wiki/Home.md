@@ -12,7 +12,7 @@ SkyShade is a drone that follows you around and holds an umbrella over your head
 <p align="center"><sub><em><b>Figure 1.</b> SkyShade in the Building District — the drone hovers over the pedestrian (red cap marker) with its umbrella open, while steering around the buildings.</em></sub></p>
 
 <p align="center">
-  <img src="images/architecture.png" alt="SkyShade system architecture" width="820">
+  <img src="images/architecture.png" alt="SkyShade system architecture" width="1100">
 </p>
 
 <p align="center"><sub><em><b>Figure 2.</b> How it fits together: three sensor inputs feed four AI subsystems, which drive the drone in a PyBullet world. Full walkthrough on the <a href="Architecture">Architecture</a> page.</em></sub></p>
@@ -90,20 +90,56 @@ After every run, a dialog replaces the automatic shutdown:
 - **Per-subsystem retrain checkboxes** — auto-ticked for any subsystem scoring poorly. Select exactly which models to retrain.
 - **Retrain Selected & Run** — opens the full Training Grounds hub for only the selected stages, then relaunches automatically when done.
 - **Run Again** — reruns the same scenario immediately without retraining.
-- **Scenario picker** — switch between Park / Forest Trail / Building District / Urban Trail for the next run without going back to the launcher.
+- **Scenario picker** — switch between any of the 11 scenarios for the next run without going back to the launcher.
 - **Performance trend chart** — bar chart of overall% across all historical runs so you can see improvement over time.
 
-### Four scenarios
+### Eleven scenarios
 
 | Scenario | Key challenge |
 |---|---|
 | **Park** | Figure-8 path, light obstacles, best for first runs |
 | **Forest Trail** | Dense canopy occludes the downward camera; tree avoidance |
-| **Building District** | City plaza with buildings, roads, vehicles, pedestrians |
+| **Building District** | City plaza with buildings, roads, vehicles, pedestrians; slow building approach tour |
 | **Urban Trail** | Bridge/underpass the drone must fly over; 8 crowd pedestrians as tracker distractors |
+| **Night Park** | Low-light streetlamp scene; tests shadow HSV tracking |
+| **Rooftop** | Confined platform, parapets, HVAC clutter, strong wind |
+| **Coastal Beach** | Open-sky tracking with strong lateral sea breeze |
+| **Parking Lot** | Rows of parked vehicles and aisle navigation |
+| **Vineyard** | Trellis rows, repeated post occlusions, tight corridors |
+| **Snowy Field** | Winter field with gusts, snow clutter, and overcast conditions |
+| **Stadium** | Oval track, stands, floodlights, and a faster circular target |
+
+### Scenario gallery
+
+| Park | Forest Trail |
+|---|---|
+| <img src="images/scene_park.png" alt="Park scenario" width="390"> | <img src="images/scene_forest.png" alt="Forest Trail scenario" width="390"> |
+
+| Building District | Urban Trail |
+|---|---|
+| <img src="images/scene_buildings.png" alt="Building District scenario" width="390"> | <img src="images/scene_trail.png" alt="Urban Trail scenario" width="390"> |
+
+| Night Park | Rooftop |
+|---|---|
+| <img src="images/scene_night.png" alt="Night Park scenario" width="390"> | <img src="images/scene_rooftop.png" alt="Rooftop scenario" width="390"> |
+
+| Coastal Beach | Parking Lot |
+|---|---|
+| <img src="images/scene_beach.png" alt="Coastal Beach scenario" width="390"> | <img src="images/scene_parking.png" alt="Parking Lot scenario" width="390"> |
+
+| Vineyard | Snowy Field |
+|---|---|
+| <img src="images/scene_vineyard.png" alt="Vineyard scenario" width="390"> | <img src="images/scene_snow.png" alt="Snowy Field scenario" width="390"> |
+
+| Stadium |
+|---|
+| <img src="images/scene_stadium.png" alt="Stadium scenario" width="390"> |
 
 ### Urban Trail — bridge fly-over
 The drone detects when it is within ±4.5 m of the bridge centre and automatically climbs from 2.5 m to 5.5 m to clear the deck, then descends once past. The terminal prints `[Bridge] fly-over ACTIVE` and `CLEAR` events.
+
+### Building District — slower city walk
+The city user now takes a slower footpath tour: one out-and-back building visit lasts `CITY_VISIT_SECONDS = 120.0` seconds. This gives the follower more time to approach walls, show avoidance steering, and recover without sprinting through the plaza.
 
 ### Visual servo (Sub-1)
 The tracker now closes a pixel-space feedback loop each frame: it measures the marker's pixel offset from image centre and nudges the gimbal target by the equivalent world-space displacement. The marker stays pinned near the centre of the drone camera even during fast user movement.
@@ -113,6 +149,9 @@ Every completed run saves a 1-Hz downsampled time-series and summary stats to `r
 
 ### Training reward history
 Completed PPO and SAC training sessions are saved to `reports/training_history.json`. The Training Grounds hub loads them on startup so the multi-run reward chart persists across restarts.
+
+### Training Grounds chart polish
+The Sub-1 Tracking Accuracy chart now keeps its legend above the plot instead of inside the lower-right corner, so the confidence, threshold, pixel-error, and pass-threshold key no longer overlaps the graph data or the right-side pixel-error axis.
 
 ### Colour terminal output
 The terminal now prints ANSI-coloured event notifications as state changes happen — no waiting for the 5-second log row:

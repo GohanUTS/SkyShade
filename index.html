@@ -54,11 +54,11 @@
       <div class="navbar-item has-dropdown is-hoverable">
         <a class="navbar-link">Wiki</a>
         <div class="navbar-dropdown">
-          <a class="navbar-item" href="https://github.com/GohanUTS/SkyShade/wiki/Project-Overview" target="_blank" rel="noopener">Project Overview</a>
-          <a class="navbar-item" href="https://github.com/GohanUTS/SkyShade/wiki/Architecture" target="_blank" rel="noopener">System Architecture</a>
-          <a class="navbar-item" href="https://github.com/GohanUTS/SkyShade/wiki/Running-the-Simulation" target="_blank" rel="noopener">Running the Simulation</a>
-          <a class="navbar-item" href="https://github.com/GohanUTS/SkyShade/wiki/Validation-and-Results" target="_blank" rel="noopener">Validation and Results</a>
-          <a class="navbar-item" href="https://github.com/GohanUTS/SkyShade/wiki/Known-Issues-and-Decisions" target="_blank" rel="noopener">Known Issues</a>
+          <a class="navbar-item" href="./wiki/Project-Overview.html">Project Overview</a>
+          <a class="navbar-item" href="./wiki/Architecture.html">System Architecture</a>
+          <a class="navbar-item" href="./wiki/Running-the-Simulation.html">Running the Simulation</a>
+          <a class="navbar-item" href="./wiki/Validation-and-Results.html">Validation and Results</a>
+          <a class="navbar-item" href="./wiki/Known-Issues-and-Decisions.html">Known Issues</a>
         </div>
       </div>
     </div>
@@ -95,7 +95,7 @@
               </span>
 
               <span class="link-block">
-                <a href="https://github.com/GohanUTS/SkyShade/wiki/Home" target="_blank" rel="noopener"
+                <a href="./wiki/Home.html"
                    class="external-link button is-normal is-rounded is-dark">
                   <span class="icon">
                     <i class="fas fa-book"></i>
@@ -148,7 +148,7 @@
         and decides when to deploy or stow an umbrella canopy.
       </h2>
       <figure class="image" style="margin: 1.2rem auto 0; max-width: 860px;">
-        <img src="./static/images/scene_city.png" alt="SkyShade drone shading a pedestrian in the city"
+        <img src="./wiki/images/scene_buildings.png" alt="SkyShade drone shading a pedestrian in the building district"
              style="border: 3px solid #60748f; border-radius: 6px;">
         <figcaption class="has-text-centered is-size-7" style="margin-top: 0.5rem; color:#555;">
           The drone holds its umbrella over a pedestrian in the Building District, steering around the towers.
@@ -194,7 +194,7 @@
   <div class="container is-max-widescreen">
     <h2 class="title is-3 has-text-centered">System Architecture</h2>
     <figure class="image" style="margin: 1.5rem auto; max-width: 1280px;">
-      <img src="./static/images/architecture.png" alt="SkyShade system architecture diagram"
+      <img src="./wiki/images/architecture.png" alt="SkyShade system architecture diagram"
            style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
       <figcaption class="has-text-centered is-size-7" style="margin-top: 0.6rem; color:#555;">
         <strong>Figure 1.</strong> End-to-end data flow: three sensor inputs feed the four AI subsystems,
@@ -230,7 +230,7 @@
 
       <p>
         Full architecture notes are available in the
-        <a href="https://github.com/GohanUTS/SkyShade/wiki/Architecture" target="_blank" rel="noopener">System Architecture wiki page</a>.
+        <a href="./wiki/Architecture.html">System Architecture wiki page</a>.
       </p>
     </div>
   </div>
@@ -270,7 +270,7 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
 
       <p>
         More detail is available in the
-        <a href="https://github.com/GohanUTS/SkyShade/wiki/Running-the-Simulation" target="_blank" rel="noopener">Running the Simulation wiki page</a>.
+        <a href="./wiki/Running-the-Simulation.html">Running the Simulation wiki page</a>.
       </p>
     </div>
   </div>
@@ -295,7 +295,7 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
             and smoothing to reduce noisy frame-to-frame movement.
           </p>
           <p>
-            <a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-1-Perception" target="_blank" rel="noopener">Read the perception wiki page</a>
+            <a href="./wiki/Sub-1-Perception.html">Read the perception wiki page</a>
           </p>
         </div>
       </div>
@@ -314,7 +314,7 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
             behaviour.
           </p>
           <p>
-            <a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-2-Flight-Control" target="_blank" rel="noopener">Read the flight control wiki page</a>
+            <a href="./wiki/Sub-2-Flight-Control.html">Read the flight control wiki page</a>
           </p>
         </div>
       </div>
@@ -335,7 +335,7 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
             rapid switching between states.
           </p>
           <p>
-            <a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-3-Environmental-Decision" target="_blank" rel="noopener">Read the environmental decision wiki page</a>
+            <a href="./wiki/Sub-3-Environmental-Decision.html">Read the environmental decision wiki page</a>
           </p>
         </div>
       </div>
@@ -354,7 +354,7 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
             then loaded at runtime by the ROS2 node.
           </p>
           <p>
-            <a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-4-Navigation-Safety" target="_blank" rel="noopener">Read the navigation safety wiki page</a>
+            <a href="./wiki/Sub-4-Navigation-Safety.html">Read the navigation safety wiki page</a>
           </p>
         </div>
       </div>
@@ -364,23 +364,67 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
 
 
 <section class="section" id="gallery">
-  <div class="container is-max-desktop">
-    <h2 class="title is-3 has-text-centered">In the Simulator</h2>
-    <div class="columns is-centered">
-      <div class="column">
-        <img src="./static/images/scene_park.png" alt="Park scenario"
+  <div class="container is-max-widescreen">
+    <h2 class="title is-3 has-text-centered">Scenario Gallery</h2>
+    <p class="has-text-centered" style="margin: 0 auto 1.5rem; max-width: 760px;">
+      The current simulation includes eleven environments used to test tracking, umbrella deployment,
+      navigation safety and obstacle handling.
+    </p>
+    <div class="columns is-multiline is-centered">
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_park.png" alt="Park scenario"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
         <p class="has-text-centered is-size-7" style="color:#555;">Park — open lawn, tightest hover.</p>
       </div>
-      <div class="column">
-        <img src="./static/images/scene_pov.png" alt="Drone POV camera"
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_forest.png" alt="Forest scenario"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
-        <p class="has-text-centered is-size-7" style="color:#555;">Drone POV — the tracker's downward view.</p>
+        <p class="has-text-centered is-size-7" style="color:#555;">Forest — dense objects and mixed terrain.</p>
       </div>
-      <div class="column">
-        <img src="./static/images/scene_drone.png" alt="Drone and umbrella close-up"
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_buildings.png" alt="Building district scenario"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
-        <p class="has-text-centered is-size-7" style="color:#555;">The drone + open umbrella canopy.</p>
+        <p class="has-text-centered is-size-7" style="color:#555;">Building District — urban towers and corridors.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_trail.png" alt="Trail scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Trail — narrow route following.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_night.png" alt="Night scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Night — low-light tracking conditions.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_rooftop.png" alt="Rooftop scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Rooftop — exposed platform and edge risk.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_beach.png" alt="Beach scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Beach — open sand and high wind tests.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_parking.png" alt="Parking lot scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Parking Lot — vehicle obstacles and lanes.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_vineyard.png" alt="Vineyard scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Vineyard — repeated rows and visibility checks.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_snow.png" alt="Snow scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Snow — bright ground and cold-weather layout.</p>
+      </div>
+      <div class="column is-one-third-desktop is-half-tablet">
+        <img src="./wiki/images/scene_stadium.png" alt="Stadium scenario"
+             style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
+        <p class="has-text-centered is-size-7" style="color:#555;">Stadium — large open operating space.</p>
       </div>
     </div>
   </div>
@@ -393,30 +437,30 @@ ros2 topic echo /skyshade/umbrella_cmd</code></pre>
 
     <div class="columns is-centered" style="margin-bottom: 0.5rem;">
       <div class="column">
-        <img src="./static/images/flight_ppo_reward.png" alt="PPO flight training reward"
+        <img src="./wiki/images/flight_ppo_reward.png" alt="PPO flight training reward"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
       </div>
       <div class="column">
-        <img src="./static/images/nav_sac_reward.png" alt="SAC navigation reward on the city layout"
+        <img src="./wiki/images/nav_sac_reward.png" alt="SAC navigation reward on the city layout"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
       </div>
     </div>
     <div class="columns is-centered" style="margin-bottom: 0.5rem;">
       <div class="column is-half">
-        <img src="./static/images/sub3_confusion_matrix.png" alt="SVM confusion matrix"
+        <img src="./wiki/images/sub3_confusion_matrix.png" alt="SVM confusion matrix"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
       </div>
       <div class="column is-half">
-        <img src="./static/images/convergence_curve.png" alt="MDP convergence curve"
+        <img src="./wiki/images/convergence_curve.png" alt="MDP convergence curve"
              style="border: 3px solid #60748f; border-radius: 6px; width: 100%;">
       </div>
     </div>
     <p class="has-text-centered is-size-7" style="margin-bottom: 1.5rem; color:#555;">
       <strong>Figure 2.</strong> Real training results &mdash; Sub-2 PPO hover reward climbing to +408
       and Sub-4 SAC navigation reward rising on the City layout (top); the Sub-3 SVM confusion matrix
-      (96&nbsp;% CV accuracy, zero false-deploys) and the Sub-4 battery-safety MDP convergence (bottom).
+      (~90&nbsp;% CV accuracy, low false-deploy risk) and the Sub-4 battery-safety MDP convergence (bottom).
       All four validation tests pass: Sub-1 100&nbsp;%/0.081&nbsp;m, Sub-2 10/10 hovers,
-      Sub-3 96&nbsp;%/0&nbsp;% flips, Sub-4 50/50 safety scenarios.
+      Sub-3 ~90&nbsp;%/low false-deploy risk, Sub-4 50/50 safety scenarios.
     </p>
 
     <div class="content has-text-justified">
@@ -453,7 +497,7 @@ data: STOW</code></pre>
 
       <p>
         Additional validation notes are available in the
-        <a href="https://github.com/GohanUTS/SkyShade/wiki/Validation-and-Results" target="_blank" rel="noopener">Validation and Results wiki page</a>.
+        <a href="./wiki/Validation-and-Results.html">Validation and Results wiki page</a>.
       </p>
     </div>
   </div>
@@ -477,7 +521,7 @@ data: STOW</code></pre>
       </p>
       <p>
         These issues are documented in the
-        <a href="https://github.com/GohanUTS/SkyShade/wiki/Known-Issues-and-Decisions" target="_blank" rel="noopener">Known Issues and Decisions wiki page</a>.
+        <a href="./wiki/Known-Issues-and-Decisions.html">Known Issues and Decisions wiki page</a>.
       </p>
     </div>
   </div>
@@ -489,16 +533,18 @@ data: STOW</code></pre>
     <h2 class="title is-3 has-text-centered">Full Wiki Pages</h2>
     <div class="content">
       <ul>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Project-Overview" target="_blank" rel="noopener">Project Overview</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Architecture" target="_blank" rel="noopener">System Architecture</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Running-the-Simulation" target="_blank" rel="noopener">Running the Simulation</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-1-Perception" target="_blank" rel="noopener">Sub-1: Perception</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-2-Flight-Control" target="_blank" rel="noopener">Sub-2: Flight Control</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-3-Environmental-Decision" target="_blank" rel="noopener">Sub-3: Environmental Decision</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Sub-4-Navigation-Safety" target="_blank" rel="noopener">Sub-4: Navigation Safety</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Training-the-Models" target="_blank" rel="noopener">Training the Models</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Validation-and-Results" target="_blank" rel="noopener">Validation and Results</a></li>
-        <li><a href="https://github.com/GohanUTS/SkyShade/wiki/Known-Issues-and-Decisions" target="_blank" rel="noopener">Known Issues and Decisions</a></li>
+        <li><a href="./wiki/Home.html">Home</a></li>
+        <li><a href="./wiki/Project-Overview.html">Project Overview</a></li>
+        <li><a href="./wiki/Architecture.html">System Architecture</a></li>
+        <li><a href="./wiki/Running-the-Simulation.html">Running the Simulation</a></li>
+        <li><a href="./wiki/Using-the-GUI.html">Using the GUI</a></li>
+        <li><a href="./wiki/Sub-1-Perception.html">Sub-1: Perception</a></li>
+        <li><a href="./wiki/Sub-2-Flight-Control.html">Sub-2: Flight Control</a></li>
+        <li><a href="./wiki/Sub-3-Environmental-Decision.html">Sub-3: Environmental Decision</a></li>
+        <li><a href="./wiki/Sub-4-Navigation-Safety.html">Sub-4: Navigation Safety</a></li>
+        <li><a href="./wiki/Training-the-Models.html">Training the Models</a></li>
+        <li><a href="./wiki/Validation-and-Results.html">Validation and Results</a></li>
+        <li><a href="./wiki/Known-Issues-and-Decisions.html">Known Issues and Decisions</a></li>
       </ul>
     </div>
   </div>
