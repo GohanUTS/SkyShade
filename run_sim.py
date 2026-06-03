@@ -73,7 +73,7 @@ LOW_BATTERY_DEMO_START = 10.0
 LOW_BATTERY_DEMO_DRAIN_RATE = 1.0
 RUNTIME_PID_DAMPING = 0.5
 WIND_FORCE_SCALE    = 0.35   # N per m/s of weather wind pushed on the drone
-USER_WALK_SPEED    = 0.07   # rad/s for figure-8 (slow stroll so the drone keeps up)
+USER_WALK_SPEED    = 0.05   # rad/s for figure-8 (gentle stroll)
 HOVER_RADIUS       = 0.5    # m
 WEATHER_MIN_SECONDS = 8.0
 WEATHER_MAX_SECONDS = 20.0
@@ -133,15 +133,15 @@ SCENARIO_DESCRIPTIONS = {
 # ── Stadium scenario constants ────────────────────────────────────────────────
 STADIUM_TRACK_RX    = 7.5    # x semi-axis of the oval track (m)
 STADIUM_TRACK_RY    = 4.8    # y semi-axis of the oval track (m)
-STADIUM_JOG_SPEED   = 0.025  # rad/s — brisk walk (~0.16–0.19 m/s average on oval)
+STADIUM_JOG_SPEED   = 0.018  # rad/s — steady walk around the oval
 STADIUM_WIND        = 1.5    # m/s gentle ambient wind (open stadium)
 
 # ── Snowy Field scenario constants ────────────────────────────────────────────
-SNOW_WALK_SPEED   = 0.06   # rad/s — slow careful walk through snow (same pattern as park)
+SNOW_WALK_SPEED   = 0.04   # rad/s — slow careful walk through snow
 SNOW_WIND_GUST    = 2.5    # m/s extra baseline wind (cold gusty day)
 
 # ── Vineyard scenario constants ───────────────────────────────────────────────
-VINEYARD_WALK_SPEED = 0.14       # m/s — walk along vineyard rows
+VINEYARD_WALK_SPEED = 0.10       # m/s — walk along vineyard rows
 VINEYARD_ROW_LENGTH = 18.0       # metres per row (x-axis)
 VINEYARD_START_X    = -9.0
 VINEYARD_ROW_Y      = [0.0, 3.0, -3.0]   # y-position of each row centre
@@ -151,7 +151,7 @@ VINEYARD_POST_R     = 0.10       # thin post radius
 VINEYARD_WIRE_H     = 1.8        # canopy wire height (visual only)
 
 # ── Night Park scenario constants ────────────────────────────────────────────
-NIGHT_WALK_SPEED  = 0.05         # rad/s figure-8 — slow evening stroll (slower than park)
+NIGHT_WALK_SPEED  = 0.035        # rad/s figure-8 — slow evening stroll
 NIGHT_LAMP_POSITIONS = [         # (x, y) of streetlamp bases
     (-4.5, -3.5), (-4.5,  3.5),
     ( 0.0, -5.0), ( 0.0,  5.0),
@@ -159,7 +159,7 @@ NIGHT_LAMP_POSITIONS = [         # (x, y) of streetlamp bases
 ]
 
 # ── Rooftop scenario constants ────────────────────────────────────────────────
-ROOFTOP_WALK_SPEED  = 0.035      # rad/s — slow roof-top circuit
+ROOFTOP_WALK_SPEED  = 0.025      # rad/s — slow roof-top circuit
 ROOFTOP_WALK_RX     = 4.0        # x half-axis of the walking ellipse
 ROOFTOP_WALK_RY     = 2.8        # y half-axis
 ROOFTOP_PLATFORM_X  = 10.0       # half-width of the rooftop slab
@@ -169,7 +169,7 @@ ROOFTOP_WIND_MIN    =  3.0       # m/s minimum wind on roof
 ROOFTOP_WIND_MAX    =  8.0       # m/s maximum wind on roof
 
 # ── Coastal Beach scenario constants ─────────────────────────────────────────
-BEACH_WALK_SPEED    = 0.14       # m/s — relaxed beach stroll
+BEACH_WALK_SPEED    = 0.10       # m/s — relaxed beach stroll
 BEACH_LENGTH        = 22.0       # metres end-to-end before looping
 BEACH_START_X       = -11.0
 BEACH_SIDE_WIND     =  5.0       # m/s steady lateral sea-breeze (y-axis)
@@ -179,7 +179,7 @@ BEACH_ROCK_POSITIONS = [         # (x, y) of scattered beach rocks
 ]
 
 # ── Parking Lot scenario constants ────────────────────────────────────────────
-PARKING_WALK_SPEED  = 0.16       # m/s — brisk walk through the car park
+PARKING_WALK_SPEED  = 0.14       # m/s — comfortable walk through car park
 # Cars: (x, y, half_length, half_width) — laid out in two facing rows
 # The human's serpentine path weaves between the rows, giving the drone a
 # tight lane to follow and the nav SAC box obstacles to avoid.
@@ -194,11 +194,10 @@ PARKING_CARS = [
 # Parking walk: constant-speed back-and-forth along the central aisle.
 # Using a speed-parameterised function (see parking_walk) so all segments
 # move at the same pace regardless of waypoint spacing.
-PARKING_WALK_SPEED = 0.20    # m/s — brisk walk (faster than park, slower than sprint)
 PARKING_AISLE_LEN  = 19.0   # m  (−9.5 m to +9.5 m along x)
 
 # ── Urban Trail scenario constants ────────────────────────────────────────────
-TRAIL_WALK_SPEED       = 0.15    # m/s — slow walk along the trail
+TRAIL_WALK_SPEED       = 0.10    # m/s — slow walk along the trail
 TRAIL_LENGTH           = 26.0    # metres end to end before looping
 TRAIL_START_X          = -13.0
 TRAIL_END_X            = 13.0
@@ -275,7 +274,7 @@ def _append_run_history(entry, max_kept=20):
 FOREST_TRAIL_START_X = -9.0
 FOREST_TRAIL_END_X = 9.0
 FOREST_TRAIL_LENGTH = FOREST_TRAIL_END_X - FOREST_TRAIL_START_X
-FOREST_WALK_SPEED = 0.12   # slow walk — realistic pace through dense canopy
+FOREST_WALK_SPEED = 0.08   # slow walk through dense canopy
 # City (Building District) — enlarged so the drone has room to roam toward
 # buildings.  Buildings sit in a ring; the ring road and footpaths scale with it.
 BUILDING_RING_MIN = 11.0
@@ -2646,7 +2645,7 @@ def update_drone_parts(phys, parts, drone_pos, rotor_angle):
 #   • "open"   — wide canopy disc + domed cap + 8 ribs + finial (rain)
 #   • "closed" — a slim folded wrap along the pole (dry)
 #   • "always" — the pole itself
-_UMB_CANOPY    = [0.20, 0.62, 0.78, 1.0]   # teal canopy
+_UMB_CANOPY    = [0.97, 0.85, 0.02, 1.0]   # bright yellow when deployed
 _UMB_RIB       = [0.13, 0.45, 0.58, 1.0]   # darker ribs / folded wrap
 _UMB_POLE      = [0.20, 0.20, 0.22, 1.0]
 _UMB_FINIAL    = [0.90, 0.90, 0.93, 1.0]
@@ -2704,8 +2703,8 @@ def update_umbrella(phys, umb, drone_pos):
 def set_umbrella_open(phys, umb, deployed: bool):
     """Umbrella is always visible; tint the canopy to signal DEPLOY vs STOW.
 
-    Deployed (rain) → bright teal canopy.  Stowed (dry) → a muted blue-grey so
-    it reads as 'not actively deployed' without ever disappearing.
+    Deployed → bright yellow canopy (hard to miss).
+    Stowed   → muted blue-grey (folded / inactive).
     """
     canopy_rgba = _UMB_CANOPY if deployed else [0.46, 0.52, 0.60, 1.0]
     for prt in umb["parts"]:
