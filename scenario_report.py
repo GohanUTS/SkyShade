@@ -109,6 +109,21 @@ SCENARIOS = {
             "Open sky means tracker lock should be high — baseline check",
         ],
     },
+    "snow": {
+        "label": "Snowy Field",
+        "description": (
+            "A snow-covered winter field with a frozen pond, pine trees, snowmen, "
+            "a wooden fence, and a sled. The human walks a slow figure-8 while "
+            "gusty omnidirectional wind pushes the drone. Overcast weather means "
+            "the umbrella SVM mostly sees low-lux/no-rain conditions — a useful "
+            "contrast to the rain-heavy other scenarios."
+        ),
+        "challenges": [
+            "Omnidirectional gusting wind (shifts direction every ~15 s) stresses hover",
+            "Low lux + zero rain tests the SVM boundary between 'cold overcast' and 'deploy'",
+            "Open field — tracker lock should be near-perfect; any loss is a regression signal",
+        ],
+    },
     "vineyard": {
         "label": "Vineyard",
         "description": (

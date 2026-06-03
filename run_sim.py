@@ -95,10 +95,12 @@ SCENARIO_ROOFTOP   = "rooftop"
 SCENARIO_BEACH     = "beach"
 SCENARIO_PARKING   = "parking"
 SCENARIO_VINEYARD  = "vineyard"
+SCENARIO_SNOW      = "snow"
 SCENARIO_CHOICES = (
     SCENARIO_PARK, SCENARIO_FOREST, SCENARIO_BUILDINGS,
     SCENARIO_TRAIL, SCENARIO_NIGHT, SCENARIO_ROOFTOP,
     SCENARIO_BEACH, SCENARIO_PARKING, SCENARIO_VINEYARD,
+    SCENARIO_SNOW,
 )
 SCENARIO_LABELS = {
     SCENARIO_PARK:      "Park",
@@ -110,6 +112,7 @@ SCENARIO_LABELS = {
     SCENARIO_BEACH:     "Coastal Beach",
     SCENARIO_PARKING:   "Parking Lot",
     SCENARIO_VINEYARD:  "Vineyard",
+    SCENARIO_SNOW:      "Snowy Field",
 }
 SCENARIO_DESCRIPTIONS = {
     SCENARIO_PARK:      "Open park loop with light obstacles and figure-8 walking.",
@@ -121,7 +124,12 @@ SCENARIO_DESCRIPTIONS = {
     SCENARIO_BEACH:     "Open sandy beach with a strong lateral sea-breeze; tests crosswind hover and open-sky tracking.",
     SCENARIO_PARKING:   "Car park with rows of parked vehicles; the human weaves between them while the drone navigates box obstacles.",
     SCENARIO_VINEYARD:  "Vineyard with rows of vine trellises; person walks between rows, creating regular partial occlusion and tight nav corridors.",
+    SCENARIO_SNOW:      "Snow-covered field in winter — frozen pond, pine trees, snowmen; gusty wind and overcast sky test the umbrella SVM in cold conditions.",
 }
+
+# ── Snowy Field scenario constants ────────────────────────────────────────────
+SNOW_WALK_SPEED   = 0.06   # rad/s — slow careful walk through snow (same pattern as park)
+SNOW_WIND_GUST    = 2.5    # m/s extra baseline wind (cold gusty day)
 
 # ── Vineyard scenario constants ───────────────────────────────────────────────
 VINEYARD_WALK_SPEED = 0.14       # m/s — walk along vineyard rows
@@ -174,20 +182,11 @@ PARKING_CARS = [
     (-8.5, -3.0, 2.2, 0.9), (-4.0, -3.0, 2.2, 0.9),
     ( 0.5, -3.0, 2.2, 0.9), ( 5.0, -3.0, 2.2, 0.9),
 ]
-# Waypoints for the serpentine path through the parking lot
-PARKING_WAYPOINTS = [
-    (-10.0,  0.0),   # entrance
-    (-7.0,   0.0),   # aisle between first car pair
-    (-7.0,   5.0),   # turn up past row A
-    (-2.5,   5.0),   # along the top
-    (-2.5,  -5.0),   # down between rows
-    ( 2.0,  -5.0),   # along the bottom
-    ( 2.0,   5.0),   # up past the gap
-    ( 7.0,   5.0),   # toward exit
-    ( 7.0,   0.0),   # exit aisle
-    ( 10.0,  0.0),   # exit
-]
-PARKING_WALK_CYCLE_T = 90.0     # seconds for one full serpentine pass
+# Parking walk: constant-speed back-and-forth along the central aisle.
+# Using a speed-parameterised function (see parking_walk) so all segments
+# move at the same pace regardless of waypoint spacing.
+PARKING_WALK_SPEED = 0.20    # m/s — brisk walk (faster than park, slower than sprint)
+PARKING_AISLE_LEN  = 19.0   # m  (−9.5 m to +9.5 m along x)
 
 # ── Urban Trail scenario constants ────────────────────────────────────────────
 TRAIL_WALK_SPEED       = 0.15    # m/s — slow walk along the trail
@@ -353,6 +352,11 @@ def city_walk(t):
     return np.array([pos[0], pos[1], 0.0])
 
 
+def snow_walk(t):
+    """Slow careful walk across the snowy field — same figure-8 as park but slower."""
+    return figure8(t * SNOW_WALK_SPEED, scale=3.5)
+
+
 def vineyard_walk(t):
     """Walk along the central row of the vineyard, looping at the far end."""
     progress = (t * VINEYARD_WALK_SPEED) % (VINEYARD_ROW_LENGTH * 2)
@@ -366,17 +370,17 @@ def vineyard_walk(t):
 
 
 def parking_walk(t):
-    """Serpentine walk through the parking lot — piece-wise linear between waypoints."""
-    pts  = PARKING_WAYPOINTS
-    n    = len(pts)
-    frac = (t % PARKING_WALK_CYCLE_T) / PARKING_WALK_CYCLE_T
-    seg_f = frac * (n - 1)
-    seg_i = min(int(seg_f), n - 2)
-    alpha = seg_f - seg_i
-    p0    = np.array(pts[seg_i],     dtype=float)
-    p1    = np.array(pts[seg_i + 1], dtype=float)
-    pos   = p0 + alpha * (p1 - p0)
-    return np.array([pos[0], pos[1], 0.0])
+    """Constant-speed back-and-forth along the parking-lot aisle with gentle lateral drift."""
+    cycle = PARKING_AISLE_LEN * 2          # out and back = 2× aisle length
+    dist  = (t * PARKING_WALK_SPEED) % cycle
+    # Fold: 0→aisle_len = forward, aisle_len→2×aisle_len = reverse
+    if dist <= PARKING_AISLE_LEN:
+        x = -PARKING_AISLE_LEN / 2 + dist
+    else:
+        x = -PARKING_AISLE_LEN / 2 + (cycle - dist)
+    # Gentle lateral weave (0.3 m amplitude) so the walk isn't a dead straight line
+    y = 0.30 * math.sin(t * 0.28)
+    return np.array([x, y, 0.0])
 
 
 def beach_walk(t):
@@ -1295,6 +1299,142 @@ def _lamp_post(phys, x, y, pole_h=3.6, head_r=0.22,
     p.createMultiBody(0, hcol, hvis, [x + 0.87, y, pole_h], physicsClientId=phys)
 
 
+def build_snow_environment(phys):
+    """Snow-covered winter field — white ground, pine trees, frozen pond, snowmen, fences."""
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.92, 0.94, 0.97, 1.0],   # bright snow
+                        physicsClientId=phys)
+
+    obstacles = []
+
+    # ── Frozen pond ──────────────────────────────────────────────────────────
+    # Ice surface (flat, slightly blue-grey)
+    _vbox(phys, [3.0, 2.2, 0.04], [-2.0, 4.5, -0.01], [0.70, 0.82, 0.92, 0.90])
+    # Thin ice rim
+    for rim_pos, rim_half in [
+        ([-2.0,  6.75, 0.06], [3.10, 0.10, 0.06]),
+        ([-2.0,  2.25, 0.06], [3.10, 0.10, 0.06]),
+        ([-5.10, 4.50, 0.06], [0.10, 2.40, 0.06]),
+        ([ 1.10, 4.50, 0.06], [0.10, 2.40, 0.06]),
+    ]:
+        _vbox(phys, rim_half, rim_pos, [0.80, 0.88, 0.92, 1.0])
+    # Cracks on ice (dark thin lines)
+    for ci in range(4):
+        ang = ci * math.pi / 4
+        _vbox(phys, [1.5, 0.012, 0.005],
+              [-2.0 + math.cos(ang) * 0.8, 4.5 + math.sin(ang) * 0.6, 0.04],
+              [0.45, 0.55, 0.65, 0.80],
+              p.getQuaternionFromEuler([0, 0, ang]))
+
+    # ── Snow-covered pine trees ───────────────────────────────────────────────
+    pine_positions = [
+        (-7.0, -5.0, 1.0), (-7.0, 5.5, 1.1), (7.5, -4.5, 0.9),
+        (7.5, 4.0, 1.0),   (4.0, -6.0, 0.8),  (-4.5, -6.5, 1.2),
+        (6.0, 6.5, 0.95),   (-6.5, 0.0, 1.05),
+    ]
+    for ptx, pty, ps in pine_positions:
+        # Trunk
+        _vcyl(phys, 0.12 * ps, 1.6 * ps, [ptx, pty, 0.8 * ps],
+              [0.42, 0.28, 0.14, 1.0])
+        # Three tiers of dark green foliage with snow caps
+        for ti, (tr, tz) in enumerate([(0.9, 1.6), (0.65, 2.3), (0.40, 2.95)]):
+            col = p.createCollisionShape(
+                p.GEOM_CYLINDER, radius=tr * ps, height=0.5 * ps, physicsClientId=phys)
+            vis = p.createVisualShape(
+                p.GEOM_CYLINDER, radius=tr * ps, length=0.5 * ps,
+                rgbaColor=[0.08, 0.28, 0.10, 1.0], physicsClientId=phys)
+            body = p.createMultiBody(0, col, vis,
+                                     [ptx, pty, tz * ps], physicsClientId=phys)
+            if ti == 0:
+                obstacles.append({"id": body, "radius": tr * ps + 0.4,
+                                   "position": np.array([ptx, pty], dtype=float)})
+            # Snow cap on each tier
+            _vcyl(phys, (tr - 0.08) * ps, 0.14, [ptx, pty, (tz + 0.27) * ps],
+                  [0.93, 0.95, 0.98, 0.85])
+
+    # ── Snowmen ───────────────────────────────────────────────────────────────
+    snowman_spots = [(-4.0, 1.5), (3.5, -3.0), (5.5, 2.5)]
+    for smx, smy in snowman_spots:
+        # Base ball
+        _vsph(phys, 0.42, [smx, smy, 0.42], [0.95, 0.96, 0.98, 1.0])
+        # Middle ball
+        _vsph(phys, 0.30, [smx, smy, 0.98], [0.95, 0.96, 0.98, 1.0])
+        # Head
+        _vsph(phys, 0.22, [smx, smy, 1.44], [0.95, 0.96, 0.98, 1.0])
+        # Carrot nose
+        _vcyl(phys, 0.035, 0.22, [smx, smy - 0.22, 1.46],
+              [0.95, 0.45, 0.05, 1.0],
+              p.getQuaternionFromEuler([math.pi / 2, 0, 0]))
+        # Coal eyes
+        for ex_off in (-0.08, 0.08):
+            _vsph(phys, 0.035, [smx + ex_off, smy - 0.19, 1.52],
+                  [0.10, 0.10, 0.10, 1.0])
+        # Coal mouth (5 dots)
+        for mi in range(5):
+            ma = (mi - 2) * 0.28
+            _vsph(phys, 0.025, [smx + 0.12 * math.sin(ma),
+                                  smy - 0.20, 1.34 + 0.05 * math.cos(ma)],
+                  [0.10, 0.10, 0.10, 1.0])
+        # Hat (dark brim + cylinder)
+        _vcyl(phys, 0.26, 0.05, [smx, smy, 1.70], [0.12, 0.10, 0.10, 1.0])
+        _vcyl(phys, 0.17, 0.36, [smx, smy, 1.93], [0.12, 0.10, 0.10, 1.0])
+        # Stick arms
+        arm_q_l = p.getQuaternionFromEuler([0, 0.8, math.pi / 2])
+        arm_q_r = p.getQuaternionFromEuler([0, -0.8, math.pi / 2])
+        _vcyl(phys, 0.025, 0.70, [smx - 0.45, smy, 0.99],
+              [0.42, 0.28, 0.12, 1.0], arm_q_l)
+        _vcyl(phys, 0.025, 0.70, [smx + 0.45, smy, 0.99],
+              [0.42, 0.28, 0.12, 1.0], arm_q_r)
+        # Red scarf
+        for si in range(6):
+            sa = si * math.pi / 3
+            _vsph(phys, 0.06, [smx + 0.25 * math.cos(sa),
+                                smy + 0.25 * math.sin(sa), 1.18],
+                  [0.82, 0.12, 0.08, 1.0])
+
+    # ── Wooden fence line ─────────────────────────────────────────────────────
+    for fi in range(8):
+        fx = -7.5 + fi * 2.2
+        # Post
+        _vcyl(phys, 0.06, 1.2, [fx, -7.5, 0.60], [0.52, 0.38, 0.22, 1.0])
+        # Rails (snow-capped)
+        if fi < 7:
+            _vbox(phys, [1.1, 0.04, 0.04], [fx + 1.1, -7.5, 0.85],
+                  [0.58, 0.42, 0.26, 1.0])
+            _vbox(phys, [1.1, 0.04, 0.04], [fx + 1.1, -7.5, 0.45],
+                  [0.58, 0.42, 0.26, 1.0])
+            # Snow on top of rail
+            _vbox(phys, [1.1, 0.055, 0.025], [fx + 1.1, -7.5, 0.90],
+                  [0.93, 0.95, 0.98, 0.80])
+
+    # ── Snow mounds (drifts) ──────────────────────────────────────────────────
+    for dmx, dmy, dmr in [(-5.5, 2.0, 0.55), (4.5, -5.0, 0.48), (0.5, -6.5, 0.60)]:
+        _vsph(phys, dmr, [dmx, dmy, dmr * 0.35], [0.93, 0.95, 0.98, 1.0])
+        _vsph(phys, dmr * 0.70, [dmx + dmr * 0.65, dmy + dmr * 0.30, dmr * 0.25],
+              [0.93, 0.95, 0.98, 1.0])
+
+    # ── Sled ─────────────────────────────────────────────────────────────────
+    sled_q = p.getQuaternionFromEuler([0, 0, 0.4])
+    _vbox(phys, [0.55, 0.22, 0.06], [2.5, 2.0, 0.12], [0.72, 0.18, 0.10, 1.0], sled_q)
+    # Runner rails
+    for rsy in (-0.25, 0.25):
+        _vbox(phys, [0.58, 0.025, 0.04], [2.5, 2.0 + rsy, 0.04],
+              [0.55, 0.52, 0.50, 1.0], sled_q)
+
+    # ── Footprint trail in snow (very faint indents) ──────────────────────────
+    for fi in range(12):
+        fa = fi * math.pi * 2 / 12
+        fx = 2.8 * math.cos(fa * 1.3)
+        fy = 2.0 * math.sin(fa)
+        step_off = 0.12 if fi % 2 == 0 else -0.12
+        _vbox(phys, [0.09, 0.05, 0.008],
+              [fx + step_off * math.cos(fa + math.pi/2),
+               fy + step_off * math.sin(fa + math.pi/2), 0.005],
+              [0.82, 0.85, 0.90, 0.75])
+
+    return obstacles
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_night_environment(phys):
@@ -1651,7 +1791,11 @@ def build_parking_environment(phys):
         vis = p.createVisualShape(p.GEOM_BOX, halfExtents=bh,
                                    rgbaColor=body_rgba, physicsClientId=phys)
         body = p.createMultiBody(0, col, vis, [cx, cy, 0.38], physicsClientId=phys)
-        obstacles.append({"id": body, "radius": max(hl, hw) + 0.4,
+        # Avoidance radius = car half-width only (no extra buffer).
+        # With the avoidance code's own 0.75 m margin, this fires when drone
+        # is within 0.75 m of the car side — close enough to matter but leaving
+        # the centre aisle (1.7 m from row) free for hover.
+        obstacles.append({"id": body, "radius": hw,
                           "position": np.array([cx, cy], dtype=float)})
 
         # --- Cabin / greenhouse ---
@@ -2146,6 +2290,8 @@ def build_environment(phys, scenario):
         return build_parking_environment(phys)
     if scenario == SCENARIO_VINEYARD:
         return build_vineyard_environment(phys)
+    if scenario == SCENARIO_SNOW:
+        return build_snow_environment(phys)
     return build_park_environment(phys)
 
 
@@ -2168,6 +2314,8 @@ def scenario_user_position(scenario, t_wall):
         return parking_walk(t_wall)
     if scenario == SCENARIO_VINEYARD:
         return vineyard_walk(t_wall)
+    if scenario == SCENARIO_SNOW:
+        return snow_walk(t_wall)
     return figure8(t_wall * USER_WALK_SPEED)
 
 
@@ -7078,6 +7226,12 @@ def run(
                 cameraTargetPosition=[0, 0, 1.5],
                 physicsClientId=phys,
             )
+        elif scenario == SCENARIO_SNOW:
+            p.resetDebugVisualizerCamera(
+                cameraDistance=14.0, cameraYaw=20, cameraPitch=-28,
+                cameraTargetPosition=[0, 0, 1.0],
+                physicsClientId=phys,
+            )
         else:
             p.resetDebugVisualizerCamera(
                 cameraDistance=11, cameraYaw=30, cameraPitch=-27,
@@ -7456,6 +7610,13 @@ def run(
                 sea_gust = BEACH_SIDE_WIND * WIND_FORCE_SCALE * (
                     1.0 + 0.2 * math.sin(0.17 * t_wall))
                 force[1] += sea_gust
+            if scenario == SCENARIO_SNOW:
+                # Cold gusty wind — omnidirectional but with a shifting dominant direction
+                snow_wind = SNOW_WIND_GUST * WIND_FORCE_SCALE * (
+                    1.0 + 0.35 * math.sin(0.09 * t_wall))
+                gust_dir = 0.4 * t_wall + 1.5 * math.sin(0.07 * t_wall)
+                force[0] += math.cos(gust_dir) * snow_wind
+                force[1] += math.sin(gust_dir) * snow_wind
             avoidance_for_display = avoidance.copy()
 
             for _ in range(STEPS_PER_ACTION):

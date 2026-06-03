@@ -16,7 +16,7 @@ git clone https://github.com/GohanUTS/SkyShade.git
 cd SkyShade
 pip install -r requirements.txt
 python3 run_sim.py                        # launcher GUI
-python3 run_sim.py --scenario beach       # jump straight to a scene
+python3 run_sim.py --scenario snow        # jump straight to a scene
 python3 run_sim.py --no-gui --scenario park --duration 120   # headless
 ```
 
@@ -26,19 +26,20 @@ python3 run_sim.py --no-gui --scenario park --duration 120   # headless
 
 ## Scenarios
 
-Nine simulation worlds, each designed to stress a different part of the AI stack:
+Ten simulation worlds, each with detailed hand-crafted environments and a different challenge for the AI stack:
 
 | Key | Name | What makes it hard |
 |---|---|---|
 | `park` | Park | Baseline — open flat loop, figure-8 walk |
-| `forest` | Forest Trail | Tree canopy occludes tracker; hover under noisy signal |
-| `buildings` | Building District | City blocks; nav must avoid near-misses with buildings |
-| `trail` | Urban Trail | Crowd distractors + bridge shadow confuse Sub-1 tracker |
-| `night` | Night Park | Low-light HSV tracking; fountain, benches, flower beds |
-| `rooftop` | Rooftop | Constant 3–8 m/s wind; HVAC units, solar panels, water tower |
-| `beach` | Coastal Beach | Lateral sea-breeze; lifeguard tower, palm trees, ocean |
-| `parking` | Parking Lot | Rectangular car obstacles; serpentine aisle walk |
-| `vineyard` | Vineyard | Rhythmic vine-post occlusion; farmhouse, grape clusters |
+| `forest` | Forest Trail | Tree canopy occludes tracker; hover under noisy position signal |
+| `buildings` | Building District | City blocks, cars, pedestrians; nav avoids building near-misses |
+| `trail` | Urban Trail | Crowd distractors + bridge shadow drop tracker confidence |
+| `night` | Night Park | Low-light HSV tracking; fountain, benches, flower beds, streetlamps |
+| `rooftop` | Rooftop | Constant 3–8 m/s wind; HVAC units, solar panels, water tower, satellite dish |
+| `beach` | Coastal Beach | Lateral sea-breeze; lifeguard tower, palm trees, ocean, volleyball net |
+| `parking` | Parking Lot | Detailed cars with cabins/wheels/lights; store building; constant-speed aisle walk |
+| `vineyard` | Vineyard | Rhythmic vine-post occlusion; farmhouse, grape clusters, irrigation pipes |
+| `snow` | Snowy Field | Omnidirectional gusting wind; frozen pond, pine trees, snowmen, wooden fence |
 
 ---
 
