@@ -41,6 +41,13 @@ python3 run_sim.py --scenario park       # Park (default)
 python3 run_sim.py --scenario forest     # Forest Trail
 python3 run_sim.py --scenario buildings  # Building District
 python3 run_sim.py --scenario trail      # Urban Trail (bridge + crowd)
+python3 run_sim.py --scenario night      # Night Park
+python3 run_sim.py --scenario rooftop    # Rooftop
+python3 run_sim.py --scenario beach      # Coastal Beach
+python3 run_sim.py --scenario parking    # Parking Lot
+python3 run_sim.py --scenario vineyard   # Vineyard
+python3 run_sim.py --scenario snow       # Snowy Field
+python3 run_sim.py --scenario stadium    # Stadium
 
 # Options
 python3 run_sim.py --duration 60         # run for 60 s (default 120)
@@ -67,8 +74,16 @@ Dense tree canopy with a 18 m dirt trail. The user walks at 0.42 m/s; the drone 
 
 **Key challenge:** tracker lock drops when the canopy closes overhead. The red marker disk (30 cm radius) is deliberately large to compensate.
 
+<p align="center">
+  <img src="images/scene_forest.png" alt="Forest Trail scenario" width="640">
+</p>
+
 ### Building District
 An enlarged city: a clear central plaza ringed by tall buildings (11–17 m out), a ring road with parked cars and buses, grassy corners with trees, and pedestrians in non-red clothing.
+
+<p align="center">
+  <img src="images/scene_buildings.png" alt="Building District scenario" width="640">
+</p>
 
 Instead of staying boxed in the plaza, the user now **walks a footpath tour** — out of the centre, right up to one building, holds, then back and on to the next building. The drone follows, so it actually approaches buildings, where two things happen:
 
@@ -83,7 +98,7 @@ Instead of staying boxed in the plaza, the user now **walks a footpath tour** �
 
 <p align="center"><sub><em><b>Figure 1.</b> The proximity logic in <code>run_sim.py</code> (Building District only). Each tick it computes the drone's clearance to the nearest building; below <code>NEAR_MISS_CLEARANCE</code> it warns, and only if the drone is actually inside the wall (avoidance failed) does it count a collision. The debounce flags mean one alert per approach, not per frame.</em></sub></p>
 
-The tour itself is just a short parametric path — walk out to a recorded building approach point, hold, walk back, advance to the next one:
+The tour itself is a slow parametric path — walk out to a recorded building approach point, hold, walk back, advance to the next one. One out-and-back visit lasts `CITY_VISIT_SECONDS = 120.0` seconds, so the user strolls rather than racing through the city:
 
 <p align="center">
   <img src="images/code_citywalk.png" alt="city walk path source" width="660">
@@ -93,8 +108,12 @@ The tour itself is just a short parametric path — walk out to a recorded build
 
 This makes the city a good place to *watch how the drone handles buildings* — it should weave around them, with the report reading "flew close, avoided".
 
-### Urban Trail *(new)*
+### Urban Trail
 A 26 m paved trail (loops) with:
+
+<p align="center">
+  <img src="images/scene_trail.png" alt="Urban Trail scenario" width="640">
+</p>
 
 | Feature | Detail |
 |---|---|
@@ -103,6 +122,55 @@ A 26 m paved trail (loops) with:
 | **8 crowd pedestrians** | Non-red shirts (blue, green, grey, teal, purple, seafoam, brown). Added to the collision obstacle list so the drone steers around them. Sub-1 tracker ignores them because they have no red marker. |
 | **Terminal events** | `[Bridge] fly-over ACTIVE` / `CLEAR` printed when the zone is entered/exited. |
 
+### Night Park
+Evening park with streetlamps, low ambient light, fountain/bench/flower-bed details, and a slower figure-8 stroll. This scene tests the tracker under darker lighting where the shadow HSV band matters.
+
+<p align="center">
+  <img src="images/scene_night.png" alt="Night Park scenario" width="640">
+</p>
+
+### Rooftop
+Confined rooftop platform with parapet walls, HVAC clutter, solar panels, a water tower, and stronger 3-8 m/s wind. This stresses hover stability and edge/obstacle avoidance in a tight space.
+
+<p align="center">
+  <img src="images/scene_rooftop.png" alt="Rooftop scenario" width="640">
+</p>
+
+### Coastal Beach
+Open sand, ocean-side props, palm trees, volleyball/lifeguard details, and a steady lateral sea breeze. The challenge is crosswind hover with an open-sky camera view.
+
+<p align="center">
+  <img src="images/scene_beach.png" alt="Coastal Beach scenario" width="640">
+</p>
+
+### Parking Lot
+Rows of rectangular car obstacles, a store building, lamp posts, and aisle navigation. The human weaves through vehicle rows while Sub-2/Sub-4 avoidance keeps the drone clear of box obstacles.
+
+<p align="center">
+  <img src="images/scene_parking.png" alt="Parking Lot scenario" width="640">
+</p>
+
+### Vineyard
+Long vine trellis rows with repeated posts and grape clusters. The person walks between rows, causing regular partial occlusion and narrow navigation corridors.
+
+<p align="center">
+  <img src="images/scene_vineyard.png" alt="Vineyard scenario" width="640">
+</p>
+
+### Snowy Field
+Snow-covered ground, frozen pond, pine trees, snowmen, fences, and gusting wind. This scenario tests tracking and umbrella decisions in bright overcast/cold-weather visual conditions.
+
+<p align="center">
+  <img src="images/scene_snow.png" alt="Snowy Field scenario" width="640">
+</p>
+
+### Stadium
+Athletics stadium with a 400 m-style oval track, stands, scoreboard/floodlights, and a faster circular target. The drone must track a brisk, smooth loop rather than the slower stroll paths.
+
+<p align="center">
+  <img src="images/scene_stadium.png" alt="Stadium scenario" width="640">
+</p>
+
 ---
 
 ## What to expect during a run
@@ -110,7 +178,7 @@ A 26 m paved trail (loops) with:
 - The drone hovers at **2.5 m** above the user, following via the PPO+PID controller
 - Battery drains at **0.5% / sec**; Sub-4 MDP triggers **RTH** when battery falls to the threshold
 - The umbrella disc turns green on `DEPLOY`, grey on `STOW`
-- Weather cycles automatically every 8–20 s between Cloudy / Light rain / Full rain
+- Weather samples update every second and the mode switches every 8–20 s between Cloudy / Light rain / Full rain. Some scenarios add their own environmental wind on top, such as rooftop, beach, snow, and stadium.
 
 ### Drone POV & AI Evidence window
 
@@ -160,7 +228,7 @@ A typical report looks like this:
 | Sub-4 Nav/Safety | Battery **40%** at end | ✅ safe |
 | **Overall** | **74% · Grade B** | → *Sub-2 PPO needs more hover training* |
 
-Underneath sits a **performance-trend bar chart** (overall % across your last runs, coloured by grade), a **scenario picker** (Park / Forest Trail / Buildings / Urban Trail), and three buttons:
+Underneath sits a **performance-trend bar chart** (overall % across your last runs, coloured by grade), a scrollable **scenario picker**, and three buttons:
 
 ### Buttons
 
@@ -172,7 +240,7 @@ Underneath sits a **performance-trend bar chart** (overall % across your last ru
 
 ### Scenario picker
 
-Click **Park**, **Forest Trail**, **Building District**, or **Urban Trail** to switch the scenario for the next run — no need to go back to the launcher.
+Click any available scenario, from **Park** through **Stadium**, to switch the next run — no need to go back to the launcher.
 
 ### Retrain checkboxes
 
@@ -208,6 +276,9 @@ export DISPLAY=:1
 python3 run_sim.py
 ```
 
+**`pybullet build time: ...` appears on startup**  
+This is normal PyBullet startup output, not an error. It can be ignored unless another traceback follows it.
+
 **Hover accuracy stays near 3% in forest**  
 The look-ahead is automatically disabled for the Forest and Urban Trail scenarios because the winding path causes oscillation. If accuracy is still low, run more training from the Simulation Complete dialog.
 
@@ -217,4 +288,20 @@ Click **🚀 Auto-Train All** in the launcher. This trains all four subsystems i
 **`stable_baselines3` or `gymnasium` not found**
 ```bash
 pip install stable-baselines3 gymnasium torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+**SciPy warns about NumPy version mismatch**
+If startup prints a warning like `A NumPy version >=1.17.3 and <1.25.0 is required ... detected 1.26.4`, Python is mixing user-site NumPy with an old system SciPy. Install the pinned SciPy into the same environment:
+
+```bash
+python3 -m pip install --user "scipy>=1.10,<1.12"
+```
+
+Then verify:
+
+```bash
+python3 - <<'PY'
+import numpy, scipy
+print(numpy.__version__, scipy.__version__)
+PY
 ```

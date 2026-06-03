@@ -3515,10 +3515,11 @@ class TrainingGroundsHub:
 
     def _build_sub1_tab(self, frame, Figure, FigureCanvasTkAgg):
         # Left: camera imshow.  Right: dual-axis chart (confidence + pixel error).
-        # constrained_layout handles spacing automatically with twinx axes.
-        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG,
-                     layout="constrained")
-        gs      = fig.add_gridspec(1, 2, width_ratios=[1.4, 1], wspace=0.05)
+        fig = Figure(figsize=(9, 3.8), dpi=90, facecolor=_MPL_FIG_BG)
+        gs      = fig.add_gridspec(
+            1, 2, width_ratios=[1.35, 1.0], wspace=0.16,
+            left=0.03, right=0.94, top=0.86, bottom=0.16,
+        )
         ax_cam   = fig.add_subplot(gs[0])
         ax_chart = fig.add_subplot(gs[1])
         # Pixel-error right axis — created ONCE here, reused every tick
@@ -4128,13 +4129,16 @@ class TrainingGroundsHub:
                                  where=[c >= CONFIDENCE_THRESH for c in cs],
                                  color="#22c55e", alpha=0.12)
 
-                # Combined legend, larger font
+                # Keep the key out of the plotted data and away from the
+                # secondary y-axis tick labels.
                 h1, l1 = ax2.get_legend_handles_labels()
                 h2, l2 = ax3.get_legend_handles_labels()
                 ax2.legend(h1 + h2, l1 + l2,
                            facecolor="#0f172a", edgecolor="#334155",
-                           labelcolor="#e2e8f0", fontsize=10,
-                           loc="lower right")
+                           labelcolor="#e2e8f0", fontsize=8,
+                           loc="upper center", bbox_to_anchor=(0.5, 1.16),
+                           ncol=2, columnspacing=0.9, handlelength=2.0,
+                           borderaxespad=0.0)
             else:
                 ax2.text(0.5, 0.5, "Waiting for frames…",
                          ha="center", va="center", color="#475569",

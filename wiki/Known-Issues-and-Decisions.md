@@ -171,6 +171,36 @@ A log of significant design decisions, bugs fixed, and current limitations — s
 
 ---
 
+### Scenario set expanded to 11 worlds
+
+**Decision:** The launcher now exposes 11 hand-built simulation worlds: Park, Forest Trail, Building District, Urban Trail, Night Park, Rooftop, Coastal Beach, Parking Lot, Vineyard, Snowy Field, and Stadium.
+
+**Why:** Four scenarios did not cover enough distinct failure modes. The added scenes isolate low-light tracking, rooftop wind, open-beach crosswind, box-obstacle navigation, repeated vineyard occlusion, snow/overcast conditions, and faster circular stadium tracking.
+
+**Impact:** The launcher scenario list is scrollable, `SCENARIO_CHOICES` includes all 11 keys, and Sub-4 SAC training maps most scenarios into a matching obstacle layout.
+
+---
+
+### Building District walk slowed down
+
+**Decision:** `CITY_VISIT_SECONDS` is now `120.0`, so each out-and-back city building visit is a slow stroll.
+
+**Why:** A faster city path made the person rush up to buildings, giving the follower less time to show avoidance behaviour and recover from near-wall tracking corrections.
+
+**Impact:** The Building District is easier to observe and debug: the user walks from the plaza to one building, holds near it, returns, then proceeds to the next building at a more realistic pace.
+
+---
+
+### Sub-1 Tracking Accuracy key moved out of the plot
+
+**Symptom:** The Sub-1 Training Grounds chart legend overlapped the confidence/pixel-error graph and the right-side pixel-error axis labels.
+
+**Fix:** The figure now uses explicit subplot margins and places the combined key above the Tracking Accuracy axes in two columns.
+
+**Impact:** The confidence trace, confidence threshold, pixel-error trace, and pass threshold are still visible in the key without covering the live data.
+
+---
+
 ## Bugs fixed
 
 ### Sub-4 always outputting `LAND_NOW`

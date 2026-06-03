@@ -144,7 +144,19 @@ Auto-Train passes the launcher's **selected scenario** into the nav trainer, so 
   <img src="images/code_sub4_scenario.png" alt="scenario_obstacles source" width="720">
 </p>
 
-<p align="center"><sub><em><b>Figure 3.</b> <code>scenario_obstacles()</code> in <code>obstacle_env.py</code>. The City becomes a dense 3 × 3 grid of pillars to weave through, the Park a few scattered trees, the Forest dense rows of trunks, and the Urban Trail a central pinch (the bridge) plus bollards. An unknown scenario falls back to the default pillar maze.</em></sub></p>
+<p align="center"><sub><em><b>Figure 3.</b> <code>scenario_obstacles()</code> in <code>obstacle_env.py</code>. The selected launch scenario is compressed into a 10 × 8 m SAC training room so the nav policy practises an obstacle pattern similar to the world it will fly in.</em></sub></p>
+
+| Scenario | SAC training layout |
+|---|---|
+| Building District | Dense 3 × 3 grid of larger city-block pillars |
+| Park | Scattered small tree obstacles |
+| Forest Trail | Dense rows of small trunk obstacles |
+| Urban Trail | Central pinch representing the bridge plus bollards |
+| Parking Lot | Two rows of wide car-like obstacles |
+| Vineyard | Flanking trellis rows with a centre aisle |
+| Stadium | Four large stand/end obstacles around an oval perimeter |
+| Beach / Rooftop / Night / Snow | Minimal open-layout obstacles to focus on wind, tracking, and edge cases |
+| Unknown | Default seven-pillar maze |
 
 ---
 
