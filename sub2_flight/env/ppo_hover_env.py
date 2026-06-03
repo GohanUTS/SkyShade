@@ -69,6 +69,15 @@ class PPOHoverEnv(gym.Env):
         """Update curriculum stage — called via SB3 env_method between rollouts."""
         self._stage = max(1, min(3, int(stage)))
 
+    # Stage-3 walk modes — each episode randomly picks one so the policy
+    # generalises to both the training-env random steps AND the smooth
+    # directional walks used in the forest/trail/beach sim scenarios.
+    #   "random"   — legacy ±0.2 m random jumps every 20 steps
+    #   "linear"   — constant velocity in one direction (like forest/trail)
+    #   "circular" — orbit around a centre point (like park figure-8)
+    _WALK_MODES  = ("random", "linear", "circular")
+    _WALK_WEIGHTS = (0.40, 0.35, 0.25)   # probability of each mode
+
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         rng = self.np_random
@@ -90,6 +99,24 @@ class PPOHoverEnv(gym.Env):
         self._user_walk  = self._stage == 3
         self._step_count = 0
 
+        # Pick walk mode and parameters for this episode
+        if self._user_walk:
+            cum = np.cumsum(self._WALK_WEIGHTS)
+            r   = float(rng.uniform())
+            idx = int(np.searchsorted(cum, r))
+            self._walk_mode = self._WALK_MODES[min(idx, len(self._WALK_MODES) - 1)]
+            # Linear: speed 0.08–0.18 m/s in a random direction
+            self._walk_speed  = float(rng.uniform(0.08, 0.18))
+            self._walk_angle  = float(rng.uniform(0, 2 * np.pi))
+            # Circular: orbit radius and angular speed
+            self._orbit_r     = float(rng.uniform(1.0, 3.0))
+            self._orbit_speed = float(rng.uniform(0.04, 0.12))
+            self._orbit_phase = float(rng.uniform(0, 2 * np.pi))
+            # Control timestep (10 Hz)
+            self._action_dt   = 0.10
+        else:
+            self._walk_mode = "random"
+
         if self._inner_env is None:
             # Large inner step limit — PPOHoverEnv controls all termination
             self._inner_env = HoverEnv(render=self._render, max_episode_steps=100_000)
@@ -100,11 +127,26 @@ class PPOHoverEnv(gym.Env):
     def step(self, action):
         action = np.clip(action, -ACTION_VEL_MAX, ACTION_VEL_MAX).astype(float)
 
-        if self._user_walk and self._step_count > 0 and self._step_count % 20 == 0:
-            rng = self.np_random
-            self._inner_env._user_pos[0] += float(rng.uniform(-0.2, 0.2))
-            self._inner_env._user_pos[1] += float(rng.uniform(-0.2, 0.2))
-            self._inner_env.notify_target_moved()
+        if self._user_walk and self._step_count > 0:
+            rng  = self.np_random
+            mode = self._walk_mode
+            if mode == "random" and self._step_count % 20 == 0:
+                self._inner_env._user_pos[0] += float(rng.uniform(-0.2, 0.2))
+                self._inner_env._user_pos[1] += float(rng.uniform(-0.2, 0.2))
+                self._inner_env.notify_target_moved()
+            elif mode == "linear":
+                # Smooth directional walk — advances every step
+                dt   = self._action_dt
+                self._inner_env._user_pos[0] += self._walk_speed * np.cos(self._walk_angle) * dt
+                self._inner_env._user_pos[1] += self._walk_speed * np.sin(self._walk_angle) * dt
+                self._inner_env.notify_target_moved()
+            elif mode == "circular" and self._step_count % 4 == 0:
+                t    = self._step_count * self._action_dt
+                cx0  = self._orbit_r * np.cos(self._orbit_speed * t + self._orbit_phase)
+                cy0  = self._orbit_r * np.sin(self._orbit_speed * t + self._orbit_phase)
+                self._inner_env._user_pos[0] = float(cx0)
+                self._inner_env._user_pos[1] = float(cy0)
+                self._inner_env.notify_target_moved()
 
         v_cur = self._inner_env.drone_vel
         force = VELOCITY_GAIN * (action - v_cur)

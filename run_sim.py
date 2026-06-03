@@ -1250,139 +1250,387 @@ def build_park_environment(phys):
     return obstacles
 
 
-def build_night_environment(phys):
-    """Park terrain at night — same grass/trees plus streetlamp props."""
-    obstacles = build_park_environment(phys)
+# ── Shared visual-only helpers ────────────────────────────────────────────────
 
-    # Streetlamps: tall pole + bright cap sphere
+def _vbox(phys, half, pos, rgba, quat=None):
+    """Zero-mass visual-only box."""
+    vis = p.createVisualShape(p.GEOM_BOX, halfExtents=half, rgbaColor=rgba,
+                              physicsClientId=phys)
+    p.createMultiBody(0, -1, vis, pos, quat or [0, 0, 0, 1],
+                      physicsClientId=phys)
+
+
+def _vcyl(phys, r, h, pos, rgba, quat=None):
+    """Zero-mass visual-only cylinder."""
+    vis = p.createVisualShape(p.GEOM_CYLINDER, radius=r, length=h, rgbaColor=rgba,
+                              physicsClientId=phys)
+    p.createMultiBody(0, -1, vis, pos, quat or [0, 0, 0, 1],
+                      physicsClientId=phys)
+
+
+def _vsph(phys, r, pos, rgba):
+    """Zero-mass visual-only sphere."""
+    vis = p.createVisualShape(p.GEOM_SPHERE, radius=r, rgbaColor=rgba,
+                              physicsClientId=phys)
+    p.createMultiBody(0, -1, vis, pos, [0, 0, 0, 1], physicsClientId=phys)
+
+
+def _lamp_post(phys, x, y, pole_h=3.6, head_r=0.22,
+               pole_col=(0.30, 0.30, 0.30, 1.0),
+               head_col=(1.0, 0.97, 0.75, 1.0)):
+    """Street-lamp: metal pole + glowing head."""
+    # Pole
+    col = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.06, height=pole_h,
+                                 physicsClientId=phys)
+    vis = p.createVisualShape(p.GEOM_CYLINDER, radius=0.06, length=pole_h,
+                               rgbaColor=list(pole_col), physicsClientId=phys)
+    p.createMultiBody(0, col, vis, [x, y, pole_h / 2], physicsClientId=phys)
+    # Arm
+    _vbox(phys, [0.45, 0.03, 0.03], [x + 0.42, y, pole_h - 0.05],
+          list(pole_col))
+    # Head
+    hcol = p.createCollisionShape(p.GEOM_SPHERE, radius=head_r, physicsClientId=phys)
+    hvis = p.createVisualShape(p.GEOM_SPHERE, radius=head_r,
+                                rgbaColor=list(head_col), physicsClientId=phys)
+    p.createMultiBody(0, hcol, hvis, [x + 0.87, y, pole_h], physicsClientId=phys)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_night_environment(phys):
+    """Evening park — dark grass, park benches, flower beds, fountain, streetlamps."""
+    plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
+    p.changeVisualShape(plane_id, -1,
+                        rgbaColor=[0.07, 0.15, 0.08, 1.0],   # dark night grass
+                        physicsClientId=phys)
+
+    obstacles = []
+
+    # ── Trees (reuse park tree builder) ──────────────────────────────────────
+    tree_positions = [
+        (-5.5, -4.0), (-5.5, 4.0), (0.0, -5.5), (0.0, 5.5),
+        (5.5, -4.0),  (5.5, 4.0),  (-3.0, 2.5),  (3.0, -2.5),
+    ]
+    for tx, ty in tree_positions:
+        obs = make_city_tree(phys, tx, ty, scale=0.9)
+
+    # ── Streetlamps ───────────────────────────────────────────────────────────
     for lx, ly in NIGHT_LAMP_POSITIONS:
-        # Pole (collision-less visual prop — narrow enough to ignore for nav)
-        pole_col = p.createCollisionShape(
-            p.GEOM_CYLINDER, radius=0.06, height=3.6, physicsClientId=phys)
-        pole_vis = p.createVisualShape(
-            p.GEOM_CYLINDER, radius=0.06, length=3.6,
-            rgbaColor=[0.35, 0.35, 0.35, 1.0], physicsClientId=phys)
-        p.createMultiBody(0, pole_col, pole_vis,
-                          [lx, ly, 1.8], physicsClientId=phys)
-        # Lamp head (small sphere, warm yellow)
-        head_col = p.createCollisionShape(
-            p.GEOM_SPHERE, radius=0.22, physicsClientId=phys)
-        head_vis = p.createVisualShape(
-            p.GEOM_SPHERE, radius=0.22,
-            rgbaColor=[1.0, 0.97, 0.75, 1.0], physicsClientId=phys)
-        p.createMultiBody(0, head_col, head_vis,
-                          [lx, ly, 3.7], physicsClientId=phys)
+        _lamp_post(phys, lx, ly, pole_h=4.0)
+
+    # ── Park benches ─────────────────────────────────────────────────────────
+    bench_spots = [(-5.0, 0.0, 0.0), (5.0, 0.0, math.pi),
+                   (0.0, -4.5, math.pi / 2), (0.0, 4.5, -math.pi / 2)]
+    for bx, by, byaw in bench_spots:
+        q = p.getQuaternionFromEuler([0, 0, byaw])
+        # Seat
+        _vbox(phys, [0.55, 0.18, 0.04], [bx, by, 0.44], [0.55, 0.35, 0.15, 1.0], q)
+        # Legs (2 pairs)
+        for lx_off in (-0.40, 0.40):
+            _vbox(phys, [0.04, 0.16, 0.22], [bx + lx_off * math.cos(byaw),
+                                               by + lx_off * math.sin(byaw), 0.22],
+                  [0.25, 0.25, 0.25, 1.0])
+        # Back rest
+        _vbox(phys, [0.55, 0.03, 0.20], [bx - 0.16 * math.sin(byaw),
+                                           by + 0.16 * math.cos(byaw), 0.70],
+              [0.55, 0.35, 0.15, 1.0], q)
+
+    # ── Flower beds ───────────────────────────────────────────────────────────
+    flower_cols = [
+        [0.95, 0.25, 0.35, 1.0],  # red
+        [1.00, 0.75, 0.10, 1.0],  # yellow
+        [0.70, 0.20, 0.80, 1.0],  # purple
+        [1.00, 0.50, 0.05, 1.0],  # orange
+    ]
+    bed_spots = [(-6.5, -2.0), (-6.5, 2.0), (6.5, -2.0), (6.5, 2.0)]
+    for i, (fx, fy) in enumerate(bed_spots):
+        # Soil border
+        _vbox(phys, [0.7, 0.7, 0.06], [fx, fy, 0.06], [0.35, 0.22, 0.10, 1.0])
+        # Flowers — small spheres in a cluster
+        for fi in range(6):
+            ang  = fi * math.pi / 3
+            fr   = 0.38
+            fcol = flower_cols[(i + fi) % len(flower_cols)]
+            _vsph(phys, 0.10, [fx + fr * math.cos(ang), fy + fr * math.sin(ang), 0.22], fcol)
+            # Stem
+            _vcyl(phys, 0.015, 0.18,
+                  [fx + fr * math.cos(ang), fy + fr * math.sin(ang), 0.09],
+                  [0.15, 0.55, 0.15, 1.0])
+
+    # ── Fountain ─────────────────────────────────────────────────────────────
+    # Basin rim
+    _vbox(phys, [1.3, 1.3, 0.12], [0.0, 0.0, 0.12], [0.60, 0.62, 0.68, 1.0])
+    _vbox(phys, [1.1, 1.1, 0.09], [0.0, 0.0, 0.21], [0.40, 0.65, 0.80, 0.7])  # water
+    # Central pillar
+    _vcyl(phys, 0.10, 0.90, [0.0, 0.0, 0.65], [0.60, 0.62, 0.68, 1.0])
+    # Top bowl
+    _vcyl(phys, 0.35, 0.08, [0.0, 0.0, 1.14], [0.60, 0.62, 0.68, 1.0])
+    _vcyl(phys, 0.28, 0.07, [0.0, 0.0, 1.20], [0.40, 0.65, 0.80, 0.7])  # water
+
+    # ── Path tiles ───────────────────────────────────────────────────────────
+    for ti in range(-4, 5):
+        _vbox(phys, [0.38, 0.38, 0.012], [ti * 0.85, 0.0, 0.012],
+              [0.45, 0.42, 0.38, 1.0])
+        _vbox(phys, [0.38, 0.38, 0.012], [0.0, ti * 0.85, 0.012],
+              [0.45, 0.42, 0.38, 1.0])
 
     return obstacles
 
 
 def build_rooftop_environment(phys):
-    """Flat rooftop platform surrounded by low parapet walls."""
+    """Urban rooftop with HVAC units, solar panels, water tank, satellite dish."""
     plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
-    p.changeVisualShape(plane_id, -1,
-                        rgbaColor=[0.55, 0.55, 0.58, 1.0],
+    # Rooftop membrane — dark grey with slight texture variation implied by color
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.38, 0.38, 0.40, 1.0],
                         physicsClientId=phys)
 
     obstacles = []
     half_x = ROOFTOP_PLATFORM_X
     half_y = ROOFTOP_PLATFORM_Y
-    wh     = ROOFTOP_WALL_H
-    wt     = 0.22
+    wh = ROOFTOP_WALL_H
+    wt = 0.22
 
+    # ── Parapet walls ─────────────────────────────────────────────────────────
     wall_specs = [
-        ([0,           -(half_y + wt/2), wh/2], [half_x*2 + wt*2, wt,     wh]),
-        ([0,            (half_y + wt/2), wh/2], [half_x*2 + wt*2, wt,     wh]),
-        ([-(half_x + wt/2), 0,           wh/2], [wt,     half_y*2, wh]),
-        ([ (half_x + wt/2), 0,           wh/2], [wt,     half_y*2, wh]),
+        ([0,              -(half_y + wt/2), wh/2], [half_x*2 + wt*2, wt, wh]),
+        ([0,               (half_y + wt/2), wh/2], [half_x*2 + wt*2, wt, wh]),
+        ([-(half_x + wt/2), 0,             wh/2], [wt, half_y*2, wh]),
+        ([ (half_x + wt/2), 0,             wh/2], [wt, half_y*2, wh]),
     ]
     for pos, size in wall_specs:
         half = [s / 2 for s in size]
-        col = p.createCollisionShape(
-            p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
-        vis = p.createVisualShape(
-            p.GEOM_BOX, halfExtents=half,
-            rgbaColor=[0.72, 0.72, 0.76, 1.0], physicsClientId=phys)
+        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=half,
+                                   rgbaColor=[0.65, 0.65, 0.68, 1.0], physicsClientId=phys)
         body = p.createMultiBody(0, col, vis, pos, physicsClientId=phys)
-        max_r = max(half[0], half[1]) + 0.3
-        obstacles.append({"id": body, "radius": max_r,
+        obstacles.append({"id": body, "radius": max(half[0], half[1]) + 0.3,
                           "position": np.array([pos[0], pos[1]], dtype=float)})
+        # Parapet cap strip
+        cap_pos = [pos[0], pos[1], wh + 0.04]
+        _vbox(phys, [half[0], half[1], 0.04], cap_pos, [0.75, 0.74, 0.76, 1.0])
 
-    # Four corner ventilation boxes (minor obstacle variety)
-    for cx, cy in [(-7.5, -5.0), (-7.5, 5.0), (7.5, -5.0), (7.5, 5.0)]:
-        bh = [0.45, 0.45, 0.5]
-        col = p.createCollisionShape(
-            p.GEOM_BOX, halfExtents=bh, physicsClientId=phys)
-        vis = p.createVisualShape(
-            p.GEOM_BOX, halfExtents=bh,
-            rgbaColor=[0.60, 0.60, 0.63, 1.0], physicsClientId=phys)
-        body = p.createMultiBody(0, col, vis,
-                                 [cx, cy, bh[2]], physicsClientId=phys)
-        obstacles.append({"id": body, "radius": 0.7,
-                          "position": np.array([cx, cy], dtype=float)})
+    # ── Large HVAC units ─────────────────────────────────────────────────────
+    hvac_specs = [
+        ((-6.0, -4.5), (1.4, 0.9, 0.7), [0.48, 0.48, 0.50, 1.0]),
+        ((-6.0,  4.5), (1.4, 0.9, 0.7), [0.48, 0.48, 0.50, 1.0]),
+        (( 6.0, -4.5), (1.8, 1.0, 0.8), [0.45, 0.45, 0.47, 1.0]),
+        (( 6.0,  4.5), (1.8, 1.0, 0.8), [0.45, 0.45, 0.47, 1.0]),
+        (( 0.0, -5.5), (2.5, 1.2, 1.0), [0.42, 0.42, 0.44, 1.0]),  # big central unit
+    ]
+    for (hx, hy), (lx, ly, lz), rgba in hvac_specs:
+        half = [lx/2, ly/2, lz/2]
+        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=half,
+                                   rgbaColor=rgba, physicsClientId=phys)
+        body = p.createMultiBody(0, col, vis, [hx, hy, lz/2], physicsClientId=phys)
+        obstacles.append({"id": body, "radius": max(lx, ly) / 2 + 0.4,
+                          "position": np.array([hx, hy], dtype=float)})
+        # Fan grille on top
+        _vbox(phys, [lx/2 - 0.05, ly/2 - 0.05, 0.04],
+              [hx, hy, lz + 0.04], [0.30, 0.30, 0.32, 1.0])
+        # Side vents — thin horizontal slats
+        for si in range(3):
+            sy = hy - ly/2 + 0.12 + si * (ly - 0.24) / 2
+            _vbox(phys, [lx/2, 0.015, 0.04], [hx, sy, lz/2 + si * 0.12],
+                  [0.35, 0.35, 0.36, 1.0])
+
+    # ── Solar panel array ─────────────────────────────────────────────────────
+    panel_tilt = p.getQuaternionFromEuler([0.22, 0, 0])
+    for pi in range(4):
+        px = -4.0 + pi * 2.2
+        # Panel frame
+        _vbox(phys, [0.95, 0.65, 0.025], [px, 2.8, 0.35], [0.08, 0.10, 0.18, 1.0],
+              panel_tilt)
+        # Solar cells (dark blue with grid lines)
+        _vbox(phys, [0.88, 0.58, 0.018], [px, 2.8, 0.37], [0.05, 0.08, 0.30, 1.0],
+              panel_tilt)
+        # Support leg
+        _vcyl(phys, 0.03, 0.30, [px, 2.5, 0.15], [0.35, 0.35, 0.35, 1.0])
+
+    # ── Water tank tower ─────────────────────────────────────────────────────
+    # Legs
+    for leg_a in (0, math.pi/2, math.pi, 3*math.pi/2):
+        lx = 5.5 + 0.45 * math.cos(leg_a)
+        ly = -2.5 + 0.45 * math.sin(leg_a)
+        _vcyl(phys, 0.06, 1.6, [lx, ly, 0.8], [0.55, 0.52, 0.48, 1.0])
+    # Tank body (cylinder)
+    tank_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.55, height=1.0,
+                                       physicsClientId=phys)
+    tank_vis = p.createVisualShape(p.GEOM_CYLINDER, radius=0.55, length=1.0,
+                                    rgbaColor=[0.75, 0.73, 0.70, 1.0], physicsClientId=phys)
+    tank_body = p.createMultiBody(0, tank_col, tank_vis, [5.5, -2.5, 2.1],
+                                   physicsClientId=phys)
+    obstacles.append({"id": tank_body, "radius": 1.0,
+                      "position": np.array([5.5, -2.5], dtype=float)})
+    # Dome top
+    _vsph(phys, 0.56, [5.5, -2.5, 2.65], [0.70, 0.68, 0.65, 1.0])
+
+    # ── Satellite dish ────────────────────────────────────────────────────────
+    # Mount pole
+    _vcyl(phys, 0.05, 0.80, [-5.5, 2.5, 0.40], [0.55, 0.55, 0.55, 1.0])
+    # Dish (flat oval approximated by flattened sphere)
+    dish_q = p.getQuaternionFromEuler([0.5, 0, 0.3])
+    _vbox(phys, [0.45, 0.04, 0.38], [-5.5, 2.5, 0.90],
+          [0.78, 0.78, 0.80, 1.0], dish_q)
+    _vbox(phys, [0.40, 0.03, 0.34], [-5.5, 2.5, 0.91],
+          [0.88, 0.88, 0.90, 1.0], dish_q)
+
+    # ── Stairwell exit structure ───────────────────────────────────────────────
+    stair_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.9, 0.7, 0.9],
+                                        physicsClientId=phys)
+    stair_vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.9, 0.7, 0.9],
+                                     rgbaColor=[0.58, 0.58, 0.61, 1.0], physicsClientId=phys)
+    stair_body = p.createMultiBody(0, stair_col, stair_vis, [-8.0, 0.0, 0.9],
+                                    physicsClientId=phys)
+    obstacles.append({"id": stair_body, "radius": 1.3,
+                      "position": np.array([-8.0, 0.0], dtype=float)})
+    # Door
+    _vbox(phys, [0.22, 0.03, 0.45], [-8.0, -0.73, 0.50], [0.35, 0.30, 0.28, 1.0])
+    # Roof overhang
+    _vbox(phys, [1.05, 0.80, 0.06], [-8.0, 0.0, 1.86], [0.50, 0.50, 0.52, 1.0])
+
+    # ── Roof drainage pipes ───────────────────────────────────────────────────
+    for dpx, dpy in [(-9.5, 6.5), (9.5, 6.5), (-9.5, -6.5), (9.5, -6.5)]:
+        _vcyl(phys, 0.05, 0.55, [dpx, dpy, 0.28], [0.40, 0.40, 0.42, 1.0])
+
+    # ── Gravel texture strip along walls (visual detail) ─────────────────────
+    for gx in np.linspace(-9.0, 9.0, 10):
+        _vbox(phys, [0.38, 0.35, 0.02], [gx, -(half_y - 0.50), 0.02],
+              [0.50, 0.49, 0.46, 1.0])
+        _vbox(phys, [0.38, 0.35, 0.02], [gx,  (half_y - 0.50), 0.02],
+              [0.50, 0.49, 0.46, 1.0])
 
     return obstacles
 
 
 def build_vineyard_environment(phys):
-    """Vineyard with three rows of thin vine trellis posts."""
+    """Vineyard with trellis rows, grape clusters, soil strips, and a farmhouse."""
     plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
-    p.changeVisualShape(plane_id, -1,
-                        rgbaColor=[0.68, 0.55, 0.36, 1.0],   # dry soil brown
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.52, 0.38, 0.22, 1.0],
                         physicsClientId=phys)
 
     obstacles = []
+
+    # ── Soil row strips ───────────────────────────────────────────────────────
     for ry in VINEYARD_ROW_Y:
-        for px in VINEYARD_POST_XS:
-            col = p.createCollisionShape(
-                p.GEOM_CYLINDER, radius=VINEYARD_POST_R,
-                height=VINEYARD_WIRE_H, physicsClientId=phys)
-            vis = p.createVisualShape(
-                p.GEOM_CYLINDER, radius=VINEYARD_POST_R,
-                length=VINEYARD_WIRE_H,
-                rgbaColor=[0.45, 0.28, 0.12, 1.0], physicsClientId=phys)
-            p.createMultiBody(0, col, vis,
-                              [px, ry, VINEYARD_WIRE_H / 2], physicsClientId=phys)
-            # Only posts in the adjacent rows (not the centre walk row) are
-            # real obstacles for the nav SAC; centre posts are thin enough to
-            # avoid with the small avoidance radius.
+        _vbox(phys, [VINEYARD_ROW_LENGTH / 2 + 0.5, 0.55, 0.015],
+              [0.0, ry, 0.015], [0.38, 0.25, 0.12, 1.0])
+
+    # ── Centre-aisle path ─────────────────────────────────────────────────────
+    _vbox(phys, [VINEYARD_ROW_LENGTH / 2 + 0.5, 0.80, 0.012],
+          [0.0, 0.0, 0.012], [0.60, 0.48, 0.30, 1.0])
+
+    # ── Trellis posts + wires + foliage + grape clusters ─────────────────────
+    grape_colors = [
+        [0.42, 0.12, 0.55, 1.0],   # deep purple
+        [0.55, 0.18, 0.65, 1.0],   # mid purple
+        [0.70, 0.05, 0.70, 1.0],   # bright purple
+    ]
+    for ry in VINEYARD_ROW_Y:
+        for pi, px in enumerate(VINEYARD_POST_XS):
+            # Wooden post
+            col = p.createCollisionShape(p.GEOM_CYLINDER, radius=VINEYARD_POST_R,
+                                          height=VINEYARD_WIRE_H, physicsClientId=phys)
+            vis = p.createVisualShape(p.GEOM_CYLINDER, radius=VINEYARD_POST_R,
+                                       length=VINEYARD_WIRE_H,
+                                       rgbaColor=[0.40, 0.24, 0.10, 1.0],
+                                       physicsClientId=phys)
+            p.createMultiBody(0, col, vis, [px, ry, VINEYARD_WIRE_H / 2],
+                               physicsClientId=phys)
             if ry != 0.0:
                 obstacles.append({"id": -1,
                                    "radius": VINEYARD_POST_R + 0.6,
                                    "position": np.array([px, ry], dtype=float)})
 
-        # Wire cross-bars (visual-only, zero mass)
+            # Dense vine canopy blob (irregular green shape)
+            for bi in range(3):
+                bx = px + (bi - 1) * 0.30
+                bz = VINEYARD_WIRE_H + 0.15 + bi * 0.12
+                fol_r = 0.42 - abs(bi - 1) * 0.08
+                _vsph(phys, fol_r, [bx, ry, bz], [0.15 + bi * 0.05,
+                      0.50 + bi * 0.06, 0.12, 0.95])
+
+            # Grape clusters hanging below canopy
+            for gi in range(2):
+                gx = px + (gi - 0.5) * 0.55
+                gcol = grape_colors[(pi + gi) % len(grape_colors)]
+                for gbi in range(4):
+                    _vsph(phys, 0.055,
+                          [gx + (gbi % 2) * 0.07,
+                           ry + (gbi // 2) * 0.07,
+                           VINEYARD_WIRE_H - 0.20 - gbi * 0.06],
+                          gcol)
+
+        # Wire segments at three heights
+        for wi, wire_z in enumerate([VINEYARD_WIRE_H, VINEYARD_WIRE_H * 0.65,
+                                      VINEYARD_WIRE_H * 0.35]):
+            for i in range(len(VINEYARD_POST_XS) - 1):
+                x0, x1 = VINEYARD_POST_XS[i], VINEYARD_POST_XS[i + 1]
+                seg = abs(x1 - x0)
+                alpha = 1.0 if wi == 0 else 0.6
+                _vcyl(phys, 0.012, seg, [(x0 + x1) / 2, ry, wire_z],
+                      [0.65, 0.65, 0.65, alpha],
+                      p.getQuaternionFromEuler([0, math.pi / 2, 0]))
+
+        # Irrigation drip pipe along ground
         for i in range(len(VINEYARD_POST_XS) - 1):
             x0, x1 = VINEYARD_POST_XS[i], VINEYARD_POST_XS[i + 1]
-            seg_len = abs(x1 - x0)
-            wire_vis = p.createVisualShape(
-                p.GEOM_CYLINDER, radius=0.015, length=seg_len,
-                rgbaColor=[0.60, 0.60, 0.60, 0.8], physicsClientId=phys)
-            p.createMultiBody(
-                0, -1, wire_vis,
-                [(x0 + x1) / 2, ry, VINEYARD_WIRE_H],
-                p.getQuaternionFromEuler([0, math.pi / 2, 0]),
-                physicsClientId=phys)
+            _vcyl(phys, 0.018, abs(x1 - x0), [(x0 + x1) / 2, ry - 0.18, 0.04],
+                  [0.22, 0.22, 0.22, 1.0],
+                  p.getQuaternionFromEuler([0, math.pi / 2, 0]))
 
-    # Dense foliage canopy along each row (large sphere, visual only)
-    for ry in VINEYARD_ROW_Y:
-        for px in VINEYARD_POST_XS:
-            fol_vis = p.createVisualShape(
-                p.GEOM_SPHERE, radius=0.45,
-                rgbaColor=[0.20, 0.55, 0.15, 0.9], physicsClientId=phys)
-            p.createMultiBody(0, -1, fol_vis,
-                              [px, ry, VINEYARD_WIRE_H + 0.2], physicsClientId=phys)
+    # ── Farmhouse at the far end ───────────────────────────────────────────────
+    fhx = VINEYARD_START_X - 2.5
+    # Whitewashed walls
+    fh_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[1.4, 1.1, 1.3],
+                                     physicsClientId=phys)
+    fh_vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[1.4, 1.1, 1.3],
+                                  rgbaColor=[0.94, 0.93, 0.88, 1.0], physicsClientId=phys)
+    fh_body = p.createMultiBody(0, fh_col, fh_vis, [fhx, 0.0, 1.3], physicsClientId=phys)
+    obstacles.append({"id": fh_body, "radius": 1.8,
+                      "position": np.array([fhx, 0.0], dtype=float)})
+    # Red-tile roof (two sloped sides as flat boxes)
+    roof_q_l = p.getQuaternionFromEuler([0.45, 0, 0])
+    roof_q_r = p.getQuaternionFromEuler([-0.45, 0, 0])
+    _vbox(phys, [1.45, 0.05, 1.25], [fhx, -0.85, 2.65],
+          [0.72, 0.18, 0.12, 1.0], roof_q_l)
+    _vbox(phys, [1.45, 0.05, 1.25], [fhx,  0.85, 2.65],
+          [0.72, 0.18, 0.12, 1.0], roof_q_r)
+    # Ridge cap
+    _vbox(phys, [1.48, 0.08, 0.06], [fhx, 0.0, 3.62], [0.55, 0.12, 0.08, 1.0])
+    # Wooden door
+    _vbox(phys, [0.24, 0.04, 0.54], [fhx, -1.14, 0.55], [0.45, 0.28, 0.12, 1.0])
+    # Two small windows
+    for wx_off in (-0.7, 0.7):
+        _vbox(phys, [0.22, 0.04, 0.22], [fhx + wx_off, -1.14, 1.35],
+              [0.55, 0.75, 0.90, 0.85])
+    # Entry path
+    for ti in range(4):
+        _vbox(phys, [0.22, 0.22, 0.012],
+              [fhx + 0.0, -1.4 - ti * 0.50, 0.012], [0.72, 0.65, 0.52, 1.0])
+
+    # ── Entrance sign post ────────────────────────────────────────────────────
+    _vcyl(phys, 0.04, 1.8, [VINEYARD_START_X + 1.5, 1.6, 0.9], [0.40, 0.24, 0.10, 1.0])
+    _vcyl(phys, 0.04, 1.8, [VINEYARD_START_X + 1.5, -1.6, 0.9], [0.40, 0.24, 0.10, 1.0])
+    _vbox(phys, [0.08, 1.6, 0.18], [VINEYARD_START_X + 1.5, 0.0, 1.82],
+          [0.40, 0.24, 0.10, 1.0])
 
     return obstacles
 
 
 def build_parking_environment(phys):
-    """Asphalt car park with two rows of parked vehicles."""
+    """Realistic car park — cars with cabins, lamp posts, bay markings, store building."""
     plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
-    p.changeVisualShape(plane_id, -1,
-                        rgbaColor=[0.30, 0.30, 0.32, 1.0],   # asphalt grey
+    p.changeVisualShape(plane_id, -1, rgbaColor=[0.26, 0.26, 0.28, 1.0],
                         physicsClientId=phys)
 
     obstacles = []
+
+    # ── Main drive-lane centre lines ──────────────────────────────────────────
+    for xi in np.linspace(-9.5, 9.5, 8):
+        _vbox(phys, [0.12, 3.0, 0.008], [xi, 0.0, 0.008], [0.90, 0.90, 0.90, 0.9])
+
+    # ── Cars: body + cabin + wheels ───────────────────────────────────────────
     car_colors = [
         [0.85, 0.12, 0.12, 1.0],  # red
         [0.15, 0.35, 0.72, 1.0],  # blue
@@ -1394,61 +1642,280 @@ def build_parking_environment(phys):
         [0.55, 0.10, 0.65, 1.0],  # purple
     ]
     for i, (cx, cy, hl, hw) in enumerate(PARKING_CARS):
-        car_h = 0.75   # car body height (m)
-        half  = [hl, hw, car_h / 2]
-        col = p.createCollisionShape(
-            p.GEOM_BOX, halfExtents=half, physicsClientId=phys)
-        vis = p.createVisualShape(
-            p.GEOM_BOX, halfExtents=half,
-            rgbaColor=car_colors[i % len(car_colors)], physicsClientId=phys)
-        body = p.createMultiBody(0, col, vis,
-                                 [cx, cy, car_h / 2], physicsClientId=phys)
+        body_rgba = car_colors[i % len(car_colors)]
+        row_sign  = 1 if cy > 0 else -1    # which side the car faces
+
+        # --- Body ---
+        bh = [hl, hw, 0.38]
+        col = p.createCollisionShape(p.GEOM_BOX, halfExtents=bh, physicsClientId=phys)
+        vis = p.createVisualShape(p.GEOM_BOX, halfExtents=bh,
+                                   rgbaColor=body_rgba, physicsClientId=phys)
+        body = p.createMultiBody(0, col, vis, [cx, cy, 0.38], physicsClientId=phys)
         obstacles.append({"id": body, "radius": max(hl, hw) + 0.4,
                           "position": np.array([cx, cy], dtype=float)})
 
-    # Parking bay line markings — thin flat boxes (visual only, zero mass)
+        # --- Cabin / greenhouse ---
+        _vbox(phys, [hl * 0.55, hw * 0.90, 0.30],
+              [cx - hl * 0.12, cy, 0.76 + 0.28], body_rgba)
+        # Windshield (tinted glass)
+        ws_qf = p.getQuaternionFromEuler([0.38 * row_sign, 0, 0])
+        _vbox(phys, [hl * 0.50, 0.04, 0.26],
+              [cx + hl * 0.28, cy - hw * 0.80 * row_sign, 0.82],
+              [0.40, 0.55, 0.70, 0.55], ws_qf)
+        # Rear screen
+        _vbox(phys, [hl * 0.45, 0.04, 0.22],
+              [cx - hl * 0.42, cy - hw * 0.72 * row_sign, 0.82],
+              [0.35, 0.48, 0.62, 0.55])
+        # Headlights
+        for hx_off in (-hl + 0.18, hl - 0.18):
+            _vsph(phys, 0.08,
+                  [cx + hx_off, cy - hw * row_sign, 0.42],
+                  [1.0, 0.97, 0.82, 1.0])
+        # Tail lights
+        for hx_off in (-hl + 0.18, hl - 0.18):
+            _vsph(phys, 0.07,
+                  [cx + hx_off, cy + hw * row_sign, 0.42],
+                  [0.90, 0.10, 0.08, 1.0])
+        # Wheels (four black cylinders)
+        wq = p.getQuaternionFromEuler([math.pi / 2, 0, 0])
+        for wx_off in (-hl * 0.60, hl * 0.60):
+            for wy_sign in (-1, 1):
+                _vcyl(phys, 0.20, 0.15,
+                      [cx + wx_off, cy + wy_sign * (hw + 0.10), 0.22],
+                      [0.10, 0.10, 0.10, 1.0], wq)
+                # Hub cap
+                _vcyl(phys, 0.09, 0.16,
+                      [cx + wx_off, cy + wy_sign * (hw + 0.17), 0.22],
+                      [0.70, 0.70, 0.72, 1.0], wq)
+
+    # ── Bay markings ──────────────────────────────────────────────────────────
     for cx, cy, hl, hw in PARKING_CARS:
-        line_half = [hl + 0.05, 0.05, 0.005]
-        lvis = p.createVisualShape(
-            p.GEOM_BOX, halfExtents=line_half,
-            rgbaColor=[0.95, 0.95, 0.20, 0.9], physicsClientId=phys)
-        p.createMultiBody(0, -1, lvis,
-                          [cx, cy + (hw + 0.1) * (1 if cy > 0 else -1), 0.005],
-                          physicsClientId=phys)
+        row_sign = 1 if cy > 0 else -1
+        # Side lines of each bay (two parallel lines)
+        for sx in (-hl - 0.10, hl + 0.10):
+            _vbox(phys, [0.04, hw * 1.4, 0.006],
+                  [cx + sx, cy, 0.006], [0.95, 0.95, 0.95, 0.85])
+        # End line
+        _vbox(phys, [hl + 0.14, 0.04, 0.006],
+              [cx, cy + (hw + 0.20) * row_sign, 0.006],
+              [0.95, 0.95, 0.95, 0.85])
+
+    # ── Car-park lamp posts ───────────────────────────────────────────────────
+    for lpx, lpy in [(-8.0, 0.0), (0.0, 0.0), (8.0, 0.0)]:
+        _lamp_post(phys, lpx, lpy, pole_h=5.0,
+                   pole_col=(0.30, 0.30, 0.32, 1.0),
+                   head_col=(1.0, 0.96, 0.82, 1.0))
+
+    # ── Shopping trolley corral ───────────────────────────────────────────────
+    corral_x, corral_y = 8.5, 0.0
+    _vbox(phys, [0.80, 0.05, 0.40], [corral_x, corral_y - 0.90, 0.40],
+          [0.55, 0.55, 0.60, 1.0])
+    _vbox(phys, [0.80, 0.05, 0.40], [corral_x, corral_y + 0.90, 0.40],
+          [0.55, 0.55, 0.60, 1.0])
+    _vbox(phys, [0.05, 0.90, 0.40], [corral_x - 0.85, corral_y, 0.40],
+          [0.55, 0.55, 0.60, 1.0])
+    for ti in range(3):
+        _vbox(phys, [0.25, 0.18, 0.22],
+              [corral_x - 0.40 + ti * 0.30, corral_y, 0.22],
+              [0.65, 0.65, 0.68, 1.0])
+
+    # ── Supermarket building at the far end ───────────────────────────────────
+    bld_x = -12.0
+    # Main building body
+    bld_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[2.0, 6.0, 2.5],
+                                      physicsClientId=phys)
+    bld_vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[2.0, 6.0, 2.5],
+                                   rgbaColor=[0.88, 0.88, 0.90, 1.0], physicsClientId=phys)
+    bld_body = p.createMultiBody(0, bld_col, bld_vis, [bld_x, 0.0, 2.5],
+                                  physicsClientId=phys)
+    obstacles.append({"id": bld_body, "radius": 2.5,
+                      "position": np.array([bld_x, 0.0], dtype=float)})
+    # Flat canopy
+    _vbox(phys, [2.5, 6.5, 0.18], [bld_x + 0.5, 0.0, 5.18], [0.75, 0.75, 0.78, 1.0])
+    # Storefront windows
+    for wy_off in (-3.5, -1.5, 0.5, 2.5):
+        _vbox(phys, [0.06, 0.80, 1.20], [bld_x + 2.06, wy_off, 1.30],
+              [0.45, 0.65, 0.85, 0.60])
+    # Entrance doors
+    _vbox(phys, [0.06, 0.55, 1.10], [bld_x + 2.06, -0.60, 1.10],
+          [0.40, 0.60, 0.80, 0.40])
+    _vbox(phys, [0.06, 0.55, 1.10], [bld_x + 2.06,  0.60, 1.10],
+          [0.40, 0.60, 0.80, 0.40])
+    # Store sign
+    _vbox(phys, [0.10, 2.50, 0.40], [bld_x + 2.10, 0.0, 4.65],
+          [0.12, 0.40, 0.80, 1.0])
+
+    # ── Bollards at entrance ──────────────────────────────────────────────────
+    for by_off in (-4.5, -3.0, -1.5, 1.5, 3.0, 4.5):
+        _vcyl(phys, 0.12, 0.80, [-10.5, by_off, 0.40], [0.88, 0.30, 0.05, 1.0])
+        _vcyl(phys, 0.13, 0.06, [-10.5, by_off, 0.82], [0.25, 0.25, 0.25, 1.0])
+
+    # ── Pedestrian crossing ───────────────────────────────────────────────────
+    for zi in range(5):
+        _vbox(phys, [0.30, 3.0, 0.008],
+              [-9.8 + zi * 0.65, 0.0, 0.008], [0.95, 0.95, 0.95, 0.8])
 
     return obstacles
 
 
 def build_beach_environment(phys):
-    """Open sandy beach — warm sand ground, scattered rocks, no structural obstacles."""
+    """Coastal beach with ocean, foam, lifeguard tower, umbrellas, chairs, rocks."""
     plane_id = p.loadURDF("plane.urdf", physicsClientId=phys)
     p.changeVisualShape(plane_id, -1,
-                        rgbaColor=[0.93, 0.87, 0.65, 1.0],   # sandy colour
+                        rgbaColor=[0.94, 0.89, 0.68, 1.0],   # dry sand
                         physicsClientId=phys)
 
     obstacles = []
-    for rx, ry in BEACH_ROCK_POSITIONS:
-        rock_r = float(np.random.uniform(0.28, 0.45))
-        col = p.createCollisionShape(
-            p.GEOM_SPHERE, radius=rock_r, physicsClientId=phys)
-        vis = p.createVisualShape(
-            p.GEOM_SPHERE, radius=rock_r,
-            rgbaColor=[0.58, 0.52, 0.46, 1.0], physicsClientId=phys)
-        p.createMultiBody(0, col, vis,
-                          [rx, ry, rock_r * 0.55], physicsClientId=phys)
-        obstacles.append({"id": -1, "radius": rock_r + 0.3,
-                          "position": np.array([rx, ry], dtype=float)})
 
-    # Low driftwood log near the water edge (decorative/minor obstacle)
-    log_col = p.createCollisionShape(
-        p.GEOM_CYLINDER, radius=0.18, height=2.5, physicsClientId=phys)
-    log_vis = p.createVisualShape(
-        p.GEOM_CYLINDER, radius=0.18, length=2.5,
-        rgbaColor=[0.55, 0.43, 0.30, 1.0], physicsClientId=phys)
-    p.createMultiBody(
-        0, log_col, log_vis, [3.5, -3.2, 0.18],
-        p.getQuaternionFromEuler([0, 0, 0.6]),
-        physicsClientId=phys)
+    # ── Ocean water (large flat slab at positive-y side) ─────────────────────
+    # Deep ocean
+    _vbox(phys, [30.0, 20.0, 0.10], [0.0, 17.0, -0.05], [0.08, 0.32, 0.65, 1.0])
+    # Shallow near-shore water — lighter, translucent
+    _vbox(phys, [30.0,  5.0, 0.06], [0.0,  8.5, -0.02], [0.25, 0.65, 0.82, 0.80])
+    # Wet sand transition (darker, damp strip)
+    _vbox(phys, [30.0, 2.5, 0.008], [0.0, 4.5, 0.005], [0.76, 0.68, 0.50, 1.0])
+    # Foam / wave line
+    for wi in range(18):
+        wx = -13.0 + wi * 1.5
+        wlen = float(np.random.uniform(0.5, 1.2))
+        _vbox(phys, [wlen, 0.25, 0.04], [wx, 3.8, 0.04], [0.96, 0.97, 0.99, 0.80])
+
+    # ── Rocky outcrops ────────────────────────────────────────────────────────
+    rock_data = [
+        (-7.0,  2.2, 0.38), (-3.0, -2.5, 0.42), (1.5,  2.8, 0.32),
+        ( 5.0, -1.8, 0.45), ( 8.5,  2.0, 0.35), (-1.0, -3.5, 0.28),
+    ]
+    for rx, ry, rr in rock_data:
+        col = p.createCollisionShape(p.GEOM_SPHERE, radius=rr, physicsClientId=phys)
+        vis = p.createVisualShape(p.GEOM_SPHERE, radius=rr,
+                                   rgbaColor=[0.55, 0.50, 0.44, 1.0], physicsClientId=phys)
+        p.createMultiBody(0, col, vis, [rx, ry, rr * 0.45], physicsClientId=phys)
+        obstacles.append({"id": -1, "radius": rr + 0.3,
+                          "position": np.array([rx, ry], dtype=float)})
+        # Smaller companion rocks
+        for si in range(2):
+            sr = rr * float(np.random.uniform(0.3, 0.6))
+            sx = rx + float(np.random.uniform(-rr * 1.2, rr * 1.2))
+            sy = ry + float(np.random.uniform(-rr * 1.2, rr * 1.2))
+            _vsph(phys, sr, [sx, sy, sr * 0.40], [0.52, 0.47, 0.41, 1.0])
+
+    # ── Beach umbrella + lounger sets ─────────────────────────────────────────
+    umbrella_sets = [
+        (-6.0, -1.0, [0.88, 0.15, 0.15, 1.0]),   # red
+        (-2.5, -1.5, [0.15, 0.40, 0.82, 1.0]),   # blue
+        ( 3.0, -0.8, [1.00, 0.80, 0.05, 1.0]),   # yellow
+        ( 7.5, -1.2, [0.20, 0.65, 0.30, 1.0]),   # green
+    ]
+    for ux, uy, ucol in umbrella_sets:
+        # Umbrella pole
+        _vcyl(phys, 0.04, 2.0, [ux, uy, 1.0], [0.60, 0.55, 0.45, 1.0])
+        # Canopy (flat disc using thin cylinder)
+        _vcyl(phys, 1.05, 0.06, [ux, uy, 2.05], ucol)
+        # Canopy underside (slightly smaller, darker)
+        under = [c * 0.75 for c in ucol[:3]] + [1.0]
+        _vcyl(phys, 0.98, 0.04, [ux, uy, 2.00], under)
+        # Canopy tip
+        _vsph(phys, 0.07, [ux, uy, 2.10], ucol)
+        # Two sun-loungers (low flat boxes)
+        for li, lx_off in enumerate((-0.60, 0.60)):
+            lounger_q = p.getQuaternionFromEuler([0, 0, 0])
+            # Mattress
+            _vbox(phys, [0.82, 0.28, 0.06], [ux + lx_off, uy - 0.2, 0.10],
+                  [0.95, 0.92, 0.85, 1.0], lounger_q)
+            # Head rest (raised end)
+            hraise_q = p.getQuaternionFromEuler([0.25, 0, 0])
+            _vbox(phys, [0.26, 0.26, 0.06],
+                  [ux + lx_off - 0.55, uy - 0.55, 0.17],
+                  [0.92, 0.88, 0.80, 1.0], hraise_q)
+            # Frame legs
+            for fx_off in (-0.70, 0.70):
+                _vcyl(phys, 0.025, 0.12, [ux + lx_off + fx_off, uy - 0.2, 0.06],
+                      [0.70, 0.65, 0.55, 1.0])
+        # Anchor weight in sand
+        _vsph(phys, 0.14, [ux, uy, 0.10], [0.75, 0.70, 0.58, 1.0])
+
+    # ── Lifeguard tower ───────────────────────────────────────────────────────
+    ltx, lty = -9.5, -0.5
+    # Four wooden legs
+    for lax, lay in [(-0.40, -0.35), (-0.40, 0.35), (0.40, -0.35), (0.40, 0.35)]:
+        leg_q = p.getQuaternionFromEuler([0.10 * (1 if lay > 0 else -1), 0, 0])
+        _vcyl(phys, 0.06, 2.40, [ltx + lax, lty + lay, 1.20],
+              [0.60, 0.42, 0.22, 1.0], leg_q)
+    # Platform deck
+    _vbox(phys, [0.55, 0.45, 0.06], [ltx, lty, 2.50], [0.65, 0.45, 0.24, 1.0])
+    # Cabin walls
+    _vbox(phys, [0.55, 0.04, 0.50], [ltx, lty - 0.45, 2.80], [0.72, 0.50, 0.28, 1.0])
+    _vbox(phys, [0.04, 0.45, 0.50], [ltx - 0.55, lty, 2.80], [0.72, 0.50, 0.28, 1.0])
+    _vbox(phys, [0.04, 0.45, 0.50], [ltx + 0.55, lty, 2.80], [0.72, 0.50, 0.28, 1.0])
+    # Red roof
+    _vbox(phys, [0.62, 0.52, 0.08], [ltx, lty, 3.36], [0.80, 0.15, 0.10, 1.0])
+    # Flag pole + flag
+    _vcyl(phys, 0.025, 1.20, [ltx, lty, 3.90], [0.70, 0.68, 0.65, 1.0])
+    _vbox(phys, [0.30, 0.01, 0.18], [ltx + 0.30, lty, 4.48], [0.90, 0.15, 0.15, 1.0])
+    # Observation window
+    _vbox(phys, [0.28, 0.04, 0.22], [ltx, lty + 0.44, 2.80],
+          [0.55, 0.78, 0.92, 0.60])
+    # Ladder rungs
+    for ri in range(5):
+        _vbox(phys, [0.18, 0.025, 0.025], [ltx, lty - 0.42, 0.38 + ri * 0.45],
+              [0.55, 0.38, 0.18, 1.0])
+
+    # ── Driftwood logs ────────────────────────────────────────────────────────
+    for lx, ly, la, ll in [
+        ( 3.5, -3.2, 0.55, 2.5), (-4.5, -4.0, -0.30, 1.8), (6.5, -3.8, 1.1, 2.0)
+    ]:
+        log_col = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.15, height=ll,
+                                          physicsClientId=phys)
+        log_vis = p.createVisualShape(p.GEOM_CYLINDER, radius=0.15, length=ll,
+                                       rgbaColor=[0.52, 0.40, 0.28, 1.0],
+                                       physicsClientId=phys)
+        p.createMultiBody(0, log_col, log_vis, [lx, ly, 0.15],
+                           p.getQuaternionFromEuler([0, 0, la]), physicsClientId=phys)
+
+    # ── Seashells scattered across sand ──────────────────────────────────────
+    shell_positions = [
+        (-8.0, 0.5), (-5.5, -2.8), (2.0, 1.8), (4.5, -3.5), (-1.5, 2.2),
+        ( 7.0, 0.8), (-3.5,  3.0), (6.0,  3.5), ( 9.0, -2.0), (-9.0, -1.8),
+    ]
+    shell_col = [0.97, 0.92, 0.82, 1.0]
+    for sx, sy in shell_positions:
+        _vsph(phys, 0.055, [sx, sy, 0.04], shell_col)
+        _vsph(phys, 0.040, [sx + 0.12, sy + 0.06, 0.03],
+              [0.92, 0.78, 0.65, 1.0])
+
+    # ── Volleyball net ────────────────────────────────────────────────────────
+    vnet_y = -4.0
+    for vxp in (-3.2, 3.2):
+        _vcyl(phys, 0.05, 2.4, [vxp, vnet_y, 1.2], [0.75, 0.65, 0.45, 1.0])
+    # Net cross-bars
+    for nz in (0.8, 1.2, 1.6, 2.0):
+        _vbox(phys, [3.2, 0.01, 0.012], [0.0, vnet_y, nz],
+              [0.95, 0.95, 0.95, 0.70])
+    # Support ropes
+    for rx_off in (-2.8, 2.8):
+        _vcyl(phys, 0.008, 1.60, [rx_off, vnet_y, 1.20],
+              [0.85, 0.72, 0.45, 0.80],
+              p.getQuaternionFromEuler([0, math.pi / 2, 0]))
+
+    # ── Palm trees ────────────────────────────────────────────────────────────
+    palm_spots = [(-11.0, -3.5), (-11.0, 2.0), (11.0, -2.5), (11.0, 3.0)]
+    for ptx, pty in palm_spots:
+        # Curved trunk (4 stacked cylinders, slightly offset)
+        for ti, (tdx, tdz) in enumerate(
+                [(0.0, 0.0), (0.05, 0.8), (0.12, 1.6), (0.18, 2.3)]):
+            _vcyl(phys, 0.12 - ti * 0.015, 0.85, [ptx + tdx, pty, tdz + 0.42],
+                  [0.55, 0.40, 0.20, 1.0])
+        # Frond cluster
+        for fi in range(7):
+            fa = fi * math.pi * 2 / 7
+            fdx = 1.0 * math.cos(fa)
+            fdy = 0.9 * math.sin(fa)
+            fq  = p.getQuaternionFromEuler([0.5 * math.sin(fa), -0.5 * math.cos(fa), fa])
+            _vbox(phys, [0.55, 0.07, 0.04],
+                  [ptx + 0.18 + fdx * 0.5, pty + fdy * 0.5, 3.65 + 0.18],
+                  [0.18, 0.52, 0.12, 1.0], fq)
+            _vsph(phys, 0.10, [ptx + 0.18 + fdx, pty + fdy, 3.55],
+                  [0.15, 0.48, 0.10, 1.0])
 
     return obstacles
 
@@ -7128,6 +7595,14 @@ def run(
                       f"{d_pos2[2]:.2f}m  {_prog_bar}")
 
             telemetry.tick(t_wall)
+
+            # ── Weather visuals (rain drops + wind streamers in 3-D scene) ────
+            if gui and WEATHER_VISUALS and tick % WEATHER_VIS_EVERY == 0:
+                draw_weather_visuals(
+                    phys, weather_now, weather_visual_rng,
+                    t_wall=t_wall,
+                    focus_xy=drone_pos[:2],
+                )
 
             # ── Frame-rate cap ────────────────────────────────────────────────
             if gui:
