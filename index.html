@@ -49,6 +49,10 @@
       background: #eef3f8;
     }
 
+    .team-photo-aaron {
+      object-position: center top;
+    }
+
     .team-fallback {
       display: none;
       align-items: center;
@@ -245,7 +249,7 @@
     <div class="columns is-multiline is-centered team-grid">
       <div class="column is-one-quarter-desktop is-half-tablet">
         <div class="team-card">
-          <img class="team-photo" src="./static/images/team/aaron.jpg" alt="Aaron"
+          <img class="team-photo team-photo-aaron" src="./static/images/team/aaron.jpg" alt="Aaron"
                onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
           <div class="team-fallback" aria-hidden="true">A</div>
           <h3 class="title is-5 team-name">Aaron</h3>
